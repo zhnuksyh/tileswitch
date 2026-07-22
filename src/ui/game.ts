@@ -1,6 +1,8 @@
 import { Board } from '../game/board';
 import { computeGrid } from '../puzzle/grid';
 import { icon, icons } from './icons';
+import { isMuted, toggleMuted } from '../audio/sfx';
+import { animate } from './motion';
 
 // Hosts a running puzzle: header with progress + controls, the board itself,
 // and a win overlay. Chooses a cell size that fits the viewport.
@@ -50,6 +52,33 @@ export function renderGame(
   progress.className = 'text-sm font-medium text-slate-300 tabular-nums';
   header.appendChild(progress);
 
+  const rightControls = document.createElement('div');
+  rightControls.className = 'flex items-center gap-2';
+
+  // Mute toggle. Icon reflects current state; click flips and persists it.
+  const muteBtn = document.createElement('button');
+  muteBtn.className =
+    'flex items-center justify-center w-10 h-10 rounded-full bg-base-800 hover:bg-base-700 transition-colors';
+  muteBtn.setAttribute('aria-label', 'Toggle sound');
+  const renderMuteIcon = () => {
+    muteBtn.innerHTML = '';
+    muteBtn.appendChild(
+      icon(isMuted() ? icons.soundOff : icons.soundOn, 'w-4 h-4'),
+    );
+    muteBtn.title = isMuted() ? 'Sound off' : 'Sound on';
+  };
+  renderMuteIcon();
+  muteBtn.addEventListener('click', () => {
+    toggleMuted();
+    renderMuteIcon();
+    animate(
+      muteBtn,
+      [{ transform: 'scale(0.85)' }, { transform: 'scale(1)' }],
+      { duration: 180, easing: 'ease-out' },
+    );
+  });
+  rightControls.appendChild(muteBtn);
+
   const restartBtn = document.createElement('button');
   restartBtn.className =
     'flex items-center gap-2 px-4 py-2 rounded-full bg-base-800 hover:bg-base-700 transition-colors text-sm font-medium';
@@ -59,7 +88,9 @@ export function renderGame(
     board.destroy();
     cb.onRestart();
   });
-  header.appendChild(restartBtn);
+  rightControls.appendChild(restartBtn);
+
+  header.appendChild(rightControls);
 
   container.appendChild(header);
 
@@ -86,7 +117,8 @@ function showWin(root: HTMLElement, board: Board, cb: GameCallbacks): void {
   const modal = document.createElement('div');
   modal.className =
     'flex flex-col items-center gap-4 p-8 rounded-3xl bg-base-800 ring-1 ring-base-700 shadow-2xl text-center';
-  modal.appendChild(icon(icons.trophy, 'w-14 h-14 text-amber-400'));
+  const trophy = icon(icons.trophy, 'w-14 h-14 text-amber-400');
+  modal.appendChild(trophy);
   const h = document.createElement('h2');
   h.className = 'text-2xl font-semibold';
   h.textContent = 'Solved!';
@@ -131,4 +163,20 @@ function showWin(root: HTMLElement, board: Board, cb: GameCallbacks): void {
     duration: 200,
     easing: 'ease-out',
   });
+  animate(
+    modal,
+    [
+      { opacity: 0, transform: 'scale(0.8) translateY(12px)' },
+      { opacity: 1, transform: 'scale(1) translateY(0)' },
+    ],
+    { duration: 380, easing: 'cubic-bezier(0.34, 1.56, 0.64, 1)' },
+  );
+  animate(
+    trophy,
+    [
+      { transform: 'scale(0) rotate(-25deg)' },
+      { transform: 'scale(1) rotate(0deg)' },
+    ],
+    { duration: 500, delay: 120, easing: 'cubic-bezier(0.34, 1.56, 0.64, 1)' },
+  );
 }

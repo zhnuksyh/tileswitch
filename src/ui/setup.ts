@@ -1,5 +1,7 @@
 import { icon, icons } from './icons';
 import { categories, type LibraryImage } from '../library/manifest';
+import { play } from '../audio/sfx';
+import { animate } from './motion';
 
 // The setup screen: pick an image from the built-in library (organized into
 // category tabs) or upload your own, then start. Resolves via the onStart
@@ -70,6 +72,12 @@ export function renderSetup(
       startBtn.disabled = false;
       startBtn.classList.remove('opacity-50', 'pointer-events-none');
       refreshSelection();
+      play('select');
+      animate(
+        previewImg,
+        [{ opacity: 0.3, transform: 'scale(1.03)' }, { opacity: 1, transform: 'scale(1)' }],
+        { duration: 260, easing: 'ease-out' },
+      );
     };
     img.src = src;
   };
@@ -156,6 +164,16 @@ export function renderSetup(
 
   refreshTabs();
   renderBody();
+
+  // Gentle entrance for the whole setup.
+  animate(
+    container,
+    [
+      { opacity: 0, transform: 'translateY(10px)' },
+      { opacity: 1, transform: 'translateY(0)' },
+    ],
+    { duration: 360, easing: 'cubic-bezier(0.22, 1, 0.36, 1)' },
+  );
 }
 
 function tabClass(active: boolean): string {
