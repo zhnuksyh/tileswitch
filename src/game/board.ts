@@ -7,13 +7,16 @@ import { play } from '../audio/sfx';
 
 // The playable board: the image is chopped into a grid of square tiles, all
 // shuffled in place so they fill the grid. Players swap tiles to sort them:
-// tap tile A then tile B to swap, or drag one tile onto another. A tile sitting
-// in its correct cell gets a subtle accent ring.
+// tap tile A then tile B to swap, or drag one tile onto another.
+//
+// When a tile lands in its correct cell it LOCKS: it settles with an animation,
+// sheds its grid styling (rounding/border) so it visually merges into the
+// picture, and can no longer be moved or selected. The remaining loose tiles
+// keep their grid look. The puzzle is solved when every tile is locked.
 //
 // Each slot is a fixed cell in the grid with its own element. Swapping two
 // slots exchanges which piece each shows — the elements never move, we just
-// repaint their image region. Swaps animate with a FLIP-style glide so the two
-// images appear to slide past each other.
+// repaint their image region. Swaps animate with a FLIP-style glide.
 
 export interface BoardCallbacks {
   onProgress: (correct: number, total: number) => void;
@@ -28,7 +31,13 @@ interface Slot {
   /** The piece currently shown in this slot. */
   piece: Piece;
   el: HTMLElement;
+  /** True once the correct piece is placed here — frozen and merged in. */
+  locked: boolean;
 }
+
+const LOOSE_CLASS =
+  'absolute cursor-pointer rounded-md transition-shadow duration-150';
+const LOCKED_CLASS = 'absolute cursor-default';
 
 export class Board {
   private puzzle: Puzzle;
@@ -86,23 +95,34 @@ export class Board {
       const row = Math.floor(index / grid.cols);
       const col = index % grid.cols;
       const el = document.createElement('div');
-      el.className =
-        'absolute cursor-pointer rounded-md transition-shadow duration-150';
+      el.className = LOOSE_CLASS;
       el.style.width = `${cellSize}px`;
       el.style.height = `${cellSize}px`;
       el.style.left = `${col * cellSize}px`;
       el.style.top = `${row * cellSize}px`;
 
-      const slot: Slot = { index, row, col, piece: pieces[index], el };
+      const slot: Slot = {
+        index,
+        row,
+        col,
+        piece: pieces[index],
+        el,
+        locked: false,
+      };
       paintTile(el, this.puzzle, slot.piece);
       el.addEventListener('pointerdown', (e) => this.onPointerDown(e, slot));
       gridEl.appendChild(el);
       this.slots.push(slot);
     }
 
+    // Lock any tiles that happen to start in the right place (no animation).
+    for (const slot of this.slots) {
+      if (this.isCorrect(slot)) this.lock(slot, false);
+    }
+
     this.paintSlots();
     this.playIntro();
-    this.cb.onProgress(this.correctCount(), this.total);
+    this.cb.onProgress(this.lockedCount(), this.total);
   }
 
   /** Staggered scale/fade-in of tiles when the board first appears. */
@@ -126,29 +146,76 @@ export class Board {
     }
   }
 
-  private correctCount(): number {
-    return this.slots.filter((s) => s.piece.id === s.index).length;
+  private lockedCount(): number {
+    return this.slots.filter((s) => s.locked).length;
   }
 
   private isCorrect(slot: Slot): boolean {
     return slot.piece.id === slot.index;
   }
 
+  /** Only loose (unlocked) slots participate in selection and swapping. */
   private paintSlots(): void {
     for (const slot of this.slots) {
-      const correct = this.isCorrect(slot);
+      if (slot.locked) continue;
       const isSel = this.selected === slot;
+      // Selected tiles lift with a shadow + accent glow; loose tiles get a
+      // faint separating border so they read as movable pieces.
       slot.el.style.boxShadow = isSel
-        ? '0 0 0 3px #38bdf8, 0 8px 20px rgba(0,0,0,0.5)'
-        : correct
-          ? 'inset 0 0 0 2px rgba(56,189,248,0.6)'
-          : 'inset 0 0 0 1px rgba(15,23,42,0.55)';
-      slot.el.style.zIndex = isSel ? '20' : '1';
+        ? '0 10px 24px rgba(0,0,0,0.55), 0 0 18px rgba(56,189,248,0.55)'
+        : 'inset 0 0 0 1px rgba(15,23,42,0.55)';
+      slot.el.style.transform = isSel ? 'scale(1.06)' : 'scale(1)';
+      slot.el.style.zIndex = isSel ? '30' : '1';
     }
   }
 
+  /**
+   * Freeze a correctly-placed slot: strip its grid styling so it merges into
+   * the picture, disable interaction, and (optionally) play a settle animation.
+   */
+  private lock(slot: Slot, celebrate: boolean): void {
+    slot.locked = true;
+    slot.el.className = LOCKED_CLASS;
+    slot.el.style.boxShadow = 'none';
+    slot.el.style.transform = 'scale(1)';
+    slot.el.style.zIndex = '2';
+
+    if (celebrate) this.settle(slot);
+  }
+
+  /** Satisfying "click into place" when a piece locks. */
+  private settle(slot: Slot): void {
+    play('place');
+    // Quick press-down then settle, so it feels like it snaps into the image.
+    animate(
+      slot.el,
+      [
+        { transform: 'scale(1.14)' },
+        { transform: 'scale(0.97)' },
+        { transform: 'scale(1)' },
+      ],
+      { duration: 360, easing: 'cubic-bezier(0.34, 1.56, 0.64, 1)' },
+    );
+    // A bright flash that fades as it becomes "part of the image".
+    const flash = document.createElement('div');
+    flash.className = 'absolute inset-0 pointer-events-none';
+    flash.style.background =
+      'radial-gradient(circle, rgba(255,255,255,0.55), rgba(56,189,248,0.35) 55%, transparent 75%)';
+    slot.el.appendChild(flash);
+    const anim = animate(
+      flash,
+      [
+        { opacity: 0.9, transform: 'scale(0.6)' },
+        { opacity: 0, transform: 'scale(1.25)' },
+      ],
+      { duration: 500, easing: 'ease-out' },
+    );
+    if (anim) anim.onfinish = () => flash.remove();
+    else flash.remove();
+  }
+
   private onPointerDown(e: PointerEvent, slot: Slot): void {
-    if (this.solved) return;
+    if (this.solved || slot.locked) return;
     e.preventDefault();
     this.dragging = slot;
     this.dragMoved = false;
@@ -175,8 +242,10 @@ export class Board {
       ghost.style.height = `${cellSize}px`;
       ghost.style.pointerEvents = 'none';
       ghost.style.zIndex = '80';
-      ghost.style.transform = 'scale(1.06)';
-      ghost.style.boxShadow = '0 0 0 3px #38bdf8, 0 12px 28px rgba(0,0,0,0.6)';
+      ghost.style.transform = 'scale(1.08)';
+      ghost.style.borderRadius = '8px';
+      ghost.style.boxShadow =
+        '0 16px 30px rgba(0,0,0,0.6), 0 0 20px rgba(56,189,248,0.5)';
       document.body.appendChild(ghost);
       this.ghost = ghost;
       this.dragging.el.style.opacity = '0.25';
@@ -196,14 +265,14 @@ export class Board {
     if (!source) return;
 
     if (this.dragMoved) {
-      // Drag-to-swap: swap with whatever slot we dropped onto.
+      // Drag-to-swap: swap with whatever loose slot we dropped onto.
       if (this.ghost) {
         this.ghost.remove();
         this.ghost = null;
       }
       source.el.style.opacity = '';
       const target = this.slotAtPoint(e.clientX, e.clientY);
-      if (target && target !== source) {
+      if (target && target !== source && !target.locked) {
         this.swap(source, target);
       } else {
         play('invalid');
@@ -239,10 +308,6 @@ export class Board {
 
   /** Exchange the pieces shown by two slots, animate the glide, and repaint. */
   private swap(a: Slot, b: Slot): void {
-    const wasCorrect = new Set(
-      [a, b].filter((s) => this.isCorrect(s)).map((s) => s.index),
-    );
-
     const tmp = a.piece;
     a.piece = b.piece;
     b.piece = tmp;
@@ -251,7 +316,7 @@ export class Board {
 
     // FLIP glide: each tile now shows the other's old image; animate its
     // transform from the other cell's offset back to zero so the picture
-    // appears to slide into place.
+    // appears to slide into place. A tiny lift mid-glide adds physicality.
     const { cellSize } = this.puzzle;
     const ax = (b.col - a.col) * cellSize;
     const ay = (b.row - a.row) * cellSize;
@@ -260,19 +325,27 @@ export class Board {
 
     play('swap');
 
-    // Celebrate any tile that just became correct (and wasn't before).
-    for (const slot of [a, b]) {
-      if (this.isCorrect(slot) && !wasCorrect.has(slot.index)) {
-        this.pulseCorrect(slot);
-      }
+    // Lock any tile that just landed correctly (after the glide settles).
+    const newlyCorrect = [a, b].filter((s) => this.isCorrect(s));
+    if (newlyCorrect.length > 0) {
+      window.setTimeout(() => {
+        for (const slot of newlyCorrect) {
+          if (!slot.locked) this.lock(slot, true);
+        }
+        this.afterLockChange();
+      }, 200);
     }
 
-    this.cb.onProgress(this.correctCount(), this.total);
-    if (this.correctCount() === this.total) {
+    this.cb.onProgress(this.lockedCount(), this.total);
+  }
+
+  private afterLockChange(): void {
+    this.cb.onProgress(this.lockedCount(), this.total);
+    if (!this.solved && this.lockedCount() === this.total) {
       this.solved = true;
       play('win');
       this.playWinRipple();
-      setTimeout(() => this.cb.onWin(), 650);
+      window.setTimeout(() => this.cb.onWin(), 700);
     }
   }
 
@@ -280,32 +353,11 @@ export class Board {
     animate(
       el,
       [
-        { transform: `translate(${fromX}px, ${fromY}px)` },
-        { transform: 'translate(0, 0)' },
+        { transform: `translate(${fromX}px, ${fromY}px) scale(1)` },
+        { transform: `translate(${fromX * 0.4}px, ${fromY * 0.4}px) scale(1.08)`, offset: 0.5 },
+        { transform: 'translate(0, 0) scale(1)' },
       ],
-      { duration: 240, easing: 'cubic-bezier(0.22, 1, 0.36, 1)' },
-    );
-  }
-
-  /** A brief glow + pop when a tile lands in its correct cell. */
-  private pulseCorrect(slot: Slot): void {
-    play('place');
-    animate(
-      slot.el,
-      [
-        { transform: 'scale(1)' },
-        { transform: 'scale(1.08)' },
-        { transform: 'scale(1)' },
-      ],
-      { duration: 300, easing: 'ease-out', delay: 120 },
-    );
-    animate(
-      slot.el,
-      [
-        { boxShadow: '0 0 0 0px rgba(56,189,248,0.9)' },
-        { boxShadow: '0 0 0 6px rgba(56,189,248,0)' },
-      ],
-      { duration: 420, easing: 'ease-out', delay: 120 },
+      { duration: 260, easing: 'cubic-bezier(0.22, 1, 0.36, 1)' },
     );
   }
 
@@ -327,6 +379,41 @@ export class Board {
         },
       );
     }
+  }
+
+  /**
+   * Briefly reveal the fully solved image over the current board (the "peek"
+   * hint). The overlay fades in, holds, and fades out.
+   */
+  peek(durationMs = 1400): void {
+    if (this.gridEl.querySelector('[data-peek]')) return;
+    const { boardWidth, boardHeight, image } = this.puzzle;
+    const layer = document.createElement('div');
+    layer.dataset.peek = '1';
+    layer.className = 'absolute inset-0 pointer-events-none';
+    layer.style.backgroundImage = `url(${image.src})`;
+    layer.style.backgroundSize = `${boardWidth}px ${boardHeight}px`;
+    layer.style.backgroundPosition = '0 0';
+    layer.style.zIndex = '40';
+    this.gridEl.appendChild(layer);
+
+    const fadeIn = layer.animate(
+      [{ opacity: 0 }, { opacity: 1 }],
+      { duration: 220, easing: 'ease-out', fill: 'forwards' },
+    );
+    const remove = () => {
+      layer
+        .animate([{ opacity: 1 }, { opacity: 0 }], {
+          duration: 300,
+          easing: 'ease-in',
+        })
+        .addEventListener('finish', () => layer.remove());
+    };
+    if (prefersReducedMotion()) {
+      layer.style.opacity = '1';
+      fadeIn.cancel();
+    }
+    window.setTimeout(remove, durationMs);
   }
 
   destroy(): void {
