@@ -16,19 +16,26 @@ export interface GameCallbacks {
 export function renderGame(
   root: HTMLElement,
   image: HTMLImageElement,
+  baseTiles: number,
   cb: GameCallbacks,
 ): void {
   root.innerHTML = '';
 
-  const grid = computeGrid(image.naturalWidth, image.naturalHeight);
+  const grid = computeGrid(image.naturalWidth, image.naturalHeight, baseTiles);
 
-  // Fit the grid within the viewport, leaving room for the header.
-  const maxBoardW = Math.min(window.innerWidth - 48, 900);
-  const maxBoardH = window.innerHeight * 0.75;
-  const cellSize = Math.floor(
+  // Fit the grid within the viewport, leaving room for the header and padding.
+  // Reserve space for the ~73px header and the board area's padding.
+  const HEADER = 73;
+  const PAD = 32;
+  const maxBoardW = Math.min(window.innerWidth - PAD, 1000);
+  const maxBoardH = window.innerHeight - HEADER - PAD;
+  const fitCell = Math.floor(
     Math.min(maxBoardW / grid.cols, maxBoardH / grid.rows),
   );
-  const safeCell = Math.max(48, cellSize);
+  // Keep tiles tappable but let fine grids shrink well below the old floor;
+  // if even this minimum overflows, the board area scrolls (overflow-auto).
+  const MIN_CELL = 22;
+  const safeCell = Math.max(MIN_CELL, fitCell);
 
   const container = document.createElement('div');
   container.className = 'min-h-screen w-full flex flex-col';
@@ -112,14 +119,19 @@ export function renderGame(
 
   container.appendChild(header);
 
-  // Board area
+  // Board area. Scrolls when a fine grid is larger than the viewport; the
+  // inner wrapper uses margin:auto so the board stays centred when it fits but
+  // pins to the top-left (not clipped) when it overflows.
   const boardArea = document.createElement('div');
-  boardArea.className = 'flex-1 flex items-center justify-center p-4 overflow-auto';
+  boardArea.className = 'flex-1 flex overflow-auto';
+  const boardCenter = document.createElement('div');
+  boardCenter.className = 'm-auto p-4';
+  boardArea.appendChild(boardCenter);
   container.appendChild(boardArea);
 
   root.appendChild(container);
 
-  const board = new Board(boardArea, image, grid, safeCell, {
+  const board = new Board(boardCenter, image, grid, safeCell, {
     onProgress: (correct, total) => {
       progress.textContent = `${correct} / ${total} in place`;
     },

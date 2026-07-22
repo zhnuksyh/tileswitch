@@ -22,7 +22,7 @@ function showSetup(): void {
 }
 
 function startGame(setup: SetupResult): void {
-  renderGame(app!, setup.image, {
+  renderGame(app!, setup.image, setup.baseTiles, {
     onExit: showSetup,
     onRestart: () => {
       if (lastSetup) startGame(lastSetup);
