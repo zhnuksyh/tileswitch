@@ -7,9 +7,9 @@ export default defineConfig({
       registerType: 'autoUpdate',
       includeAssets: ['favicon.svg'],
       manifest: {
-        name: 'Jigsaw Puzzle',
-        short_name: 'Jigsaw',
-        description: 'Turn any image into a jigsaw puzzle.',
+        name: 'TileSwitch',
+        short_name: 'TileSwitch',
+        description: 'Swap the tiles to rebuild the picture.',
         theme_color: '#0f172a',
         background_color: '#0f172a',
         display: 'standalone',

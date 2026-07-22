@@ -29,7 +29,7 @@ export function renderSetup(
   titleRow.appendChild(icon(icons.puzzle, 'w-9 h-9 text-accent'));
   const h1 = document.createElement('h1');
   h1.className = 'text-4xl font-semibold tracking-tight';
-  h1.textContent = 'Jigsaw Puzzle';
+  h1.textContent = 'TileSwitch';
   titleRow.appendChild(h1);
   header.appendChild(titleRow);
   const sub = document.createElement('p');
