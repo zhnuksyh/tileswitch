@@ -1,35 +1,46 @@
 import { createPuzzle } from '../puzzle/model';
 import type { Piece, Puzzle } from '../puzzle/model';
-import { renderPieceSVG } from '../puzzle/render';
+import { paintTile } from '../puzzle/render';
 import type { GridSize } from '../puzzle/grid';
 
-// The playable board: a target grid on the left/top where pieces snap into
-// place, and a shuffled tray of loose pieces. Pieces are dragged (mouse or
-// touch) from the tray onto the grid; a piece dropped near its home cell snaps
-// in and locks.
+// The playable board: the image is chopped into a grid of square tiles, all
+// shuffled in place so they fill the grid. Players swap tiles to sort them:
+// tap tile A then tile B to swap, or drag one tile onto another. A tile sitting
+// in its correct cell gets a subtle accent ring.
+//
+// Each slot is a fixed cell in the grid with its own element. Swapping two
+// slots exchanges which piece each shows — the elements never move, we just
+// repaint their image region. This keeps the DOM stable and simple.
 
 export interface BoardCallbacks {
-  onProgress: (placed: number, total: number) => void;
+  onProgress: (correct: number, total: number) => void;
   onWin: () => void;
 }
 
-interface DragState {
+interface Slot {
+  /** Grid cell index this slot represents (row-major). */
+  index: number;
+  row: number;
+  col: number;
+  /** The piece currently shown in this slot. */
   piece: Piece;
   el: HTMLElement;
-  fromTray: boolean;
-  offsetX: number;
-  offsetY: number;
 }
 
 export class Board {
   private puzzle: Puzzle;
   private root: HTMLElement;
   private gridEl!: HTMLElement;
-  private trayEl!: HTMLElement;
-  private layer!: HTMLElement;
-  private pieceEls = new Map<number, HTMLElement>();
-  private drag: DragState | null = null;
-  private placedCount = 0;
+  private slots: Slot[] = [];
+  private selected: Slot | null = null;
+  private solved = false;
+
+  // Drag state (drag-to-swap).
+  private dragging: Slot | null = null;
+  private ghost: HTMLElement | null = null;
+  private dragMoved = false;
+  private startX = 0;
+  private startY = 0;
 
   constructor(
     root: HTMLElement,
@@ -48,177 +59,175 @@ export class Board {
   }
 
   private build(): void {
-    const { boardWidth, boardHeight, cellSize } = this.puzzle;
+    const { boardWidth, boardHeight, cellSize, grid } = this.puzzle;
     this.root.innerHTML = '';
 
-    const wrap = document.createElement('div');
-    wrap.className = 'flex flex-col items-center gap-6 w-full';
-
-    // --- Target grid ---
     const gridEl = document.createElement('div');
     gridEl.className =
-      'relative rounded-2xl bg-base-800/60 ring-1 ring-base-700 shadow-2xl';
+      'relative rounded-xl overflow-hidden ring-1 ring-base-700 shadow-2xl select-none touch-none';
     gridEl.style.width = `${boardWidth}px`;
     gridEl.style.height = `${boardHeight}px`;
-    gridEl.style.backgroundImage =
-      'linear-gradient(rgba(148,163,184,0.08) 1px, transparent 1px), linear-gradient(90deg, rgba(148,163,184,0.08) 1px, transparent 1px)';
-    gridEl.style.backgroundSize = `${cellSize}px ${cellSize}px`;
     this.gridEl = gridEl;
-    wrap.appendChild(gridEl);
+    this.root.appendChild(gridEl);
 
-    // Drag layer sits above everything so dragged pieces float.
-    const layer = document.createElement('div');
-    layer.className = 'pointer-events-none fixed inset-0 z-50';
-    this.layer = layer;
+    // Shuffle piece order across the cells until it isn't already solved.
+    const pieces = [...this.puzzle.pieces];
+    do {
+      for (let i = pieces.length - 1; i > 0; i--) {
+        const j = Math.floor(Math.random() * (i + 1));
+        [pieces[i], pieces[j]] = [pieces[j], pieces[i]];
+      }
+    } while (pieces.every((p, i) => p.id === i) && pieces.length > 1);
 
-    // --- Tray ---
-    // Fixed-height, scrollable tray. A fixed height is important: it keeps the
-    // board from reflowing as pieces leave the tray, so a piece's home position
-    // is stable between pick-up and drop.
-    const tray = document.createElement('div');
-    tray.className =
-      'no-scrollbar flex flex-wrap justify-center content-start gap-3 w-full max-w-full p-4 rounded-2xl bg-base-800/40 ring-1 ring-base-700 overflow-y-auto';
-    tray.style.height = '11rem';
-    this.trayEl = tray;
-    wrap.appendChild(tray);
+    for (let index = 0; index < pieces.length; index++) {
+      const row = Math.floor(index / grid.cols);
+      const col = index % grid.cols;
+      const el = document.createElement('div');
+      el.className = 'absolute cursor-pointer rounded-md transition-shadow duration-150';
+      el.style.width = `${cellSize}px`;
+      el.style.height = `${cellSize}px`;
+      el.style.left = `${col * cellSize}px`;
+      el.style.top = `${row * cellSize}px`;
 
-    this.root.appendChild(wrap);
-    document.body.appendChild(layer);
-
-    // Create pieces in shuffled order in the tray.
-    const shuffled = [...this.puzzle.pieces];
-    for (let i = shuffled.length - 1; i > 0; i--) {
-      const j = Math.floor(Math.random() * (i + 1));
-      [shuffled[i], shuffled[j]] = [shuffled[j], shuffled[i]];
-    }
-    for (const piece of shuffled) {
-      const el = this.createPieceEl(piece);
-      this.pieceEls.set(piece.id, el);
-      tray.appendChild(el);
+      const slot: Slot = { index, row, col, piece: pieces[index], el };
+      paintTile(el, this.puzzle, slot.piece);
+      el.addEventListener('pointerdown', (e) => this.onPointerDown(e, slot));
+      gridEl.appendChild(el);
+      this.slots.push(slot);
     }
 
-    this.cb.onProgress(0, this.total);
+    this.paintSlots();
+    this.cb.onProgress(this.correctCount(), this.total);
   }
 
-  private createPieceEl(piece: Piece): HTMLElement {
-    const el = document.createElement('div');
-    el.className =
-      'cursor-grab active:cursor-grabbing touch-none select-none transition-transform hover:scale-105';
-    el.style.width = 'fit-content';
-    el.dataset.pieceId = String(piece.id);
-    el.dataset.row = String(piece.row);
-    el.dataset.col = String(piece.col);
-    const svg = renderPieceSVG(this.puzzle, piece);
-    el.appendChild(svg);
-    el.addEventListener('pointerdown', (e) => this.onPointerDown(e, piece, el));
-    return el;
+  private correctCount(): number {
+    return this.slots.filter((s) => s.piece.id === s.index).length;
   }
 
-  private onPointerDown(e: PointerEvent, piece: Piece, el: HTMLElement): void {
-    if (piece.placed) return;
+  private paintSlots(): void {
+    for (const slot of this.slots) {
+      const correct = slot.piece.id === slot.index;
+      const isSel = this.selected === slot;
+      slot.el.style.boxShadow = isSel
+        ? '0 0 0 3px #38bdf8, 0 8px 20px rgba(0,0,0,0.5)'
+        : correct
+          ? 'inset 0 0 0 2px rgba(56,189,248,0.6)'
+          : 'inset 0 0 0 1px rgba(15,23,42,0.55)';
+      slot.el.style.zIndex = isSel ? '20' : '1';
+    }
+  }
+
+  private onPointerDown(e: PointerEvent, slot: Slot): void {
+    if (this.solved) return;
     e.preventDefault();
-
-    const rect = el.getBoundingClientRect();
-    this.drag = {
-      piece,
-      el,
-      fromTray: el.parentElement === this.trayEl,
-      offsetX: e.clientX - rect.left,
-      offsetY: e.clientY - rect.top,
-    };
-
-    // Float the element on the drag layer.
-    el.style.position = 'fixed';
-    el.style.left = `${rect.left}px`;
-    el.style.top = `${rect.top}px`;
-    el.style.zIndex = '60';
-    el.style.pointerEvents = 'none';
-    el.classList.remove('hover:scale-105');
-    this.layer.appendChild(el);
-
+    this.dragging = slot;
+    this.dragMoved = false;
+    this.startX = e.clientX;
+    this.startY = e.clientY;
     window.addEventListener('pointermove', this.onPointerMove);
     window.addEventListener('pointerup', this.onPointerUp);
   }
 
   private onPointerMove = (e: PointerEvent): void => {
-    if (!this.drag) return;
-    this.drag.el.style.left = `${e.clientX - this.drag.offsetX}px`;
-    this.drag.el.style.top = `${e.clientY - this.drag.offsetY}px`;
+    if (!this.dragging) return;
+    const dx = e.clientX - this.startX;
+    const dy = e.clientY - this.startY;
+    if (!this.dragMoved && Math.hypot(dx, dy) < 6) return;
+
+    const { cellSize } = this.puzzle;
+    if (!this.dragMoved) {
+      this.dragMoved = true;
+      // Create a floating ghost that mirrors the dragged tile.
+      const ghost = this.dragging.el.cloneNode(true) as HTMLElement;
+      ghost.style.position = 'fixed';
+      ghost.style.margin = '0';
+      ghost.style.width = `${cellSize}px`;
+      ghost.style.height = `${cellSize}px`;
+      ghost.style.pointerEvents = 'none';
+      ghost.style.zIndex = '80';
+      ghost.style.boxShadow = '0 0 0 3px #38bdf8, 0 12px 28px rgba(0,0,0,0.6)';
+      document.body.appendChild(ghost);
+      this.ghost = ghost;
+      this.dragging.el.style.opacity = '0.25';
+    }
+    if (this.ghost) {
+      const rect = this.gridEl.getBoundingClientRect();
+      this.ghost.style.left = `${rect.left + this.dragging.col * cellSize + dx}px`;
+      this.ghost.style.top = `${rect.top + this.dragging.row * cellSize + dy}px`;
+    }
   };
 
   private onPointerUp = (e: PointerEvent): void => {
-    if (!this.drag) return;
     window.removeEventListener('pointermove', this.onPointerMove);
     window.removeEventListener('pointerup', this.onPointerUp);
+    const source = this.dragging;
+    this.dragging = null;
+    if (!source) return;
 
-    const { piece, el } = this.drag;
-    const { cellSize } = this.puzzle;
-    const overhang = piece.overhang;
-
-    // Target position of piece's top-left (including overhang) on the grid.
-    const gridRect = this.gridEl.getBoundingClientRect();
-    const homeX = gridRect.left + piece.col * cellSize - overhang;
-    const homeY = gridRect.top + piece.row * cellSize - overhang;
-
-    // Current piece top-left in viewport.
-    const curX = e.clientX - this.drag.offsetX;
-    const curY = e.clientY - this.drag.offsetY;
-
-    const dist = Math.hypot(curX - homeX, curY - homeY);
-    const snapThreshold = cellSize * 0.5;
-
-    if (dist <= snapThreshold) {
-      this.placePiece(piece, el);
-    } else {
-      this.returnToTray(el);
+    if (this.dragMoved) {
+      // Drag-to-swap: swap with whatever slot we dropped onto.
+      if (this.ghost) {
+        this.ghost.remove();
+        this.ghost = null;
+      }
+      source.el.style.opacity = '';
+      const target = this.slotAtPoint(e.clientX, e.clientY);
+      if (target && target !== source) {
+        this.swap(source, target);
+      }
+      this.selected = null;
+      this.paintSlots();
+      return;
     }
 
-    this.drag = null;
+    // Tap-to-swap: first tap selects, second tap swaps.
+    if (!this.selected) {
+      this.selected = source;
+    } else if (this.selected === source) {
+      this.selected = null;
+    } else {
+      this.swap(this.selected, source);
+      this.selected = null;
+    }
+    this.paintSlots();
   };
 
-  private placePiece(piece: Piece, el: HTMLElement): void {
-    const { cellSize } = this.puzzle;
-    const overhang = piece.overhang;
-    piece.placed = true;
-
-    // Anchor the piece absolutely inside the grid element.
-    el.style.position = 'absolute';
-    el.style.left = `${piece.col * cellSize - overhang}px`;
-    el.style.top = `${piece.row * cellSize - overhang}px`;
-    el.style.zIndex = '10';
-    el.style.pointerEvents = 'none';
-    el.classList.remove('cursor-grab', 'active:cursor-grabbing');
-    this.gridEl.appendChild(el);
-
-    // Little snap pop.
-    el.animate(
-      [
-        { transform: 'scale(1.08)' },
-        { transform: 'scale(1)' },
-      ],
-      { duration: 180, easing: 'ease-out' },
-    );
-
-    this.placedCount++;
-    this.cb.onProgress(this.placedCount, this.total);
-    if (this.placedCount === this.total) {
-      this.cb.onWin();
-    }
+  private slotAtPoint(x: number, y: number): Slot | null {
+    const rect = this.gridEl.getBoundingClientRect();
+    const { cellSize, grid } = this.puzzle;
+    const col = Math.floor((x - rect.left) / cellSize);
+    const row = Math.floor((y - rect.top) / cellSize);
+    if (row < 0 || col < 0 || row >= grid.rows || col >= grid.cols) return null;
+    const index = row * grid.cols + col;
+    return this.slots.find((s) => s.index === index) ?? null;
   }
 
-  private returnToTray(el: HTMLElement): void {
-    el.style.position = '';
-    el.style.left = '';
-    el.style.top = '';
-    el.style.zIndex = '';
-    el.style.pointerEvents = '';
-    el.classList.add('hover:scale-105');
-    this.trayEl.appendChild(el);
+  /** Exchange the pieces shown by two slots and repaint them. */
+  private swap(a: Slot, b: Slot): void {
+    const tmp = a.piece;
+    a.piece = b.piece;
+    b.piece = tmp;
+    paintTile(a.el, this.puzzle, a.piece);
+    paintTile(b.el, this.puzzle, b.piece);
+
+    // Brief pop on both tiles.
+    for (const el of [a.el, b.el]) {
+      el.animate(
+        [{ transform: 'scale(0.94)' }, { transform: 'scale(1)' }],
+        { duration: 150, easing: 'ease-out' },
+      );
+    }
+
+    this.cb.onProgress(this.correctCount(), this.total);
+    if (this.correctCount() === this.total) {
+      this.solved = true;
+      setTimeout(() => this.cb.onWin(), 250);
+    }
   }
 
   destroy(): void {
     window.removeEventListener('pointermove', this.onPointerMove);
     window.removeEventListener('pointerup', this.onPointerUp);
-    this.layer.remove();
+    if (this.ghost) this.ghost.remove();
   }
 }
