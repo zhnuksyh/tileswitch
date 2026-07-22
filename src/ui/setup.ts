@@ -2,13 +2,16 @@ import { icon, icons } from './icons';
 import { categories, type LibraryImage } from '../library/manifest';
 import { play } from '../audio/sfx';
 import { animate } from './motion';
+import { DIFFICULTIES, DEFAULT_DIFFICULTY } from '../game/difficulty';
 
 // The setup screen: pick an image from the built-in library (organized into
-// category tabs) or upload your own, then start. Resolves via the onStart
-// callback with the chosen image.
+// category tabs) or upload your own, choose a difficulty, then start. Resolves
+// via the onStart callback with the chosen image and grid fineness.
 
 export interface SetupResult {
   image: HTMLImageElement;
+  /** Tiles along the image's shorter side — higher is harder. */
+  baseTiles: number;
 }
 
 type TabId = string; // category id, or 'upload'
@@ -19,6 +22,7 @@ export function renderSetup(
 ): void {
   let selectedImage: HTMLImageElement | null = null;
   let selectedSrc: string | null = null;
+  let selectedDifficulty = DEFAULT_DIFFICULTY;
 
   root.innerHTML = '';
 
@@ -145,6 +149,44 @@ export function renderSetup(
     refreshSelection();
   };
 
+  // Difficulty selector: sets how fine the tile grid is.
+  const diffSection = document.createElement('div');
+  diffSection.className = 'flex flex-col gap-2 pt-1';
+  const diffLabel = document.createElement('span');
+  diffLabel.className = 'text-xs font-medium text-slate-400';
+  diffLabel.textContent = 'Difficulty';
+  diffSection.appendChild(diffLabel);
+
+  const diffRow = document.createElement('div');
+  diffRow.className = 'grid grid-cols-4 gap-2';
+  const diffButtons = new Map<string, HTMLButtonElement>();
+  const refreshDifficulty = () => {
+    for (const [id, btn] of diffButtons) {
+      btn.className = diffClass(id === selectedDifficulty.id);
+    }
+  };
+  for (const diff of DIFFICULTIES) {
+    const btn = document.createElement('button');
+    btn.className = diffClass(diff.id === selectedDifficulty.id);
+    const name = document.createElement('span');
+    name.className = 'text-sm font-semibold';
+    name.textContent = diff.label;
+    const hint = document.createElement('span');
+    hint.className = 'text-[11px] opacity-70 tabular-nums';
+    hint.textContent = diff.hint;
+    btn.appendChild(name);
+    btn.appendChild(hint);
+    btn.addEventListener('click', () => {
+      selectedDifficulty = diff;
+      refreshDifficulty();
+      play('select');
+    });
+    diffButtons.set(diff.id, btn);
+    diffRow.appendChild(btn);
+  }
+  diffSection.appendChild(diffRow);
+  card.appendChild(diffSection);
+
   container.appendChild(card);
 
   // Start
@@ -156,7 +198,10 @@ export function renderSetup(
   startBtn.appendChild(document.createTextNode('Start Puzzle'));
   startBtn.addEventListener('click', () => {
     if (!selectedImage) return;
-    onStart({ image: selectedImage });
+    onStart({
+      image: selectedImage,
+      baseTiles: selectedDifficulty.baseTiles,
+    });
   });
   container.appendChild(startBtn);
 
@@ -179,6 +224,14 @@ export function renderSetup(
 function tabClass(active: boolean): string {
   const base =
     'px-4 py-1.5 rounded-full text-sm font-medium transition-colors';
+  return active
+    ? `${base} bg-accent text-base-900`
+    : `${base} bg-base-700 hover:bg-base-600 text-slate-200`;
+}
+
+function diffClass(active: boolean): string {
+  const base =
+    'flex flex-col items-center justify-center gap-0.5 px-2 py-2 rounded-xl transition-colors';
   return active
     ? `${base} bg-accent text-base-900`
     : `${base} bg-base-700 hover:bg-base-600 text-slate-200`;
