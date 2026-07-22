@@ -1,5 +1,6 @@
 // Computes a rows x cols grid for a puzzle, adapting to the image aspect ratio
-// so tiles stay roughly square.
+// so tiles stay roughly square. Library images are 16:9, which lands on a clean
+// 4 x 7 grid; other aspect ratios still work.
 
 export interface GridSize {
   rows: number;

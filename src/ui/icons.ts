@@ -6,6 +6,8 @@ import {
   RotateCcw,
   Trophy,
   ArrowLeft,
+  Volume2,
+  VolumeX,
   type IconNode,
 } from 'lucide';
 
@@ -26,4 +28,6 @@ export const icons = {
   restart: RotateCcw,
   trophy: Trophy,
   back: ArrowLeft,
+  soundOn: Volume2,
+  soundOff: VolumeX,
 };
