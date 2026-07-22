@@ -159,12 +159,12 @@ export class Board {
     for (const slot of this.slots) {
       if (slot.locked) continue;
       const isSel = this.selected === slot;
-      // Selected tiles lift with a shadow + accent glow; loose tiles get a
-      // faint separating border so they read as movable pieces.
+      // Selected tiles get a thick bright outline; loose tiles keep a faint
+      // separating border so they read as movable pieces.
       slot.el.style.boxShadow = isSel
-        ? '0 10px 24px rgba(0,0,0,0.55), 0 0 18px rgba(56,189,248,0.55)'
+        ? 'inset 0 0 0 4px #fbbf24, 0 8px 20px rgba(0,0,0,0.5)'
         : 'inset 0 0 0 1px rgba(15,23,42,0.55)';
-      slot.el.style.transform = isSel ? 'scale(1.06)' : 'scale(1)';
+      slot.el.style.transform = 'scale(1)';
       slot.el.style.zIndex = isSel ? '30' : '1';
     }
   }
