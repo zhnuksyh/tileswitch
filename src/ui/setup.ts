@@ -1,15 +1,12 @@
-import { DIFFICULTIES } from '../puzzle/grid';
-import type { Difficulty } from '../puzzle/grid';
 import { icon, icons } from './icons';
 
-// The setup screen: choose an image (default sample or upload your own) and a
-// difficulty, then start. Resolves via the onStart callback.
+// The setup screen: choose an image (default sample or upload your own), then
+// start. Resolves via the onStart callback.
 
 const SAMPLE_SRC = '/sample-puzzle.png';
 
 export interface SetupResult {
   image: HTMLImageElement;
-  difficulty: Difficulty;
 }
 
 export function renderSetup(
@@ -17,7 +14,6 @@ export function renderSetup(
   onStart: (result: SetupResult) => void,
 ): void {
   let selectedImage: HTMLImageElement | null = null;
-  let selectedDifficulty: Difficulty = DIFFICULTIES[1];
 
   root.innerHTML = '';
 
@@ -38,7 +34,7 @@ export function renderSetup(
   header.appendChild(titleRow);
   const sub = document.createElement('p');
   sub.className = 'text-slate-400 text-sm';
-  sub.textContent = 'Turn any image into a puzzle. Pick one and play.';
+  sub.textContent = 'Swap the tiles to rebuild the picture.';
   header.appendChild(sub);
   container.appendChild(header);
 
@@ -90,41 +86,6 @@ export function renderSetup(
 
   container.appendChild(card);
 
-  // Difficulty
-  const diffWrap = document.createElement('div');
-  diffWrap.className = 'flex flex-col items-center gap-3';
-  const diffLabel = document.createElement('span');
-  diffLabel.className = 'text-xs uppercase tracking-wider text-slate-500';
-  diffLabel.textContent = 'Difficulty';
-  diffWrap.appendChild(diffLabel);
-
-  const diffRow = document.createElement('div');
-  diffRow.className = 'flex gap-2';
-  const diffButtons: HTMLButtonElement[] = [];
-  const paint = () => {
-    diffButtons.forEach((b, i) => {
-      const active = DIFFICULTIES[i] === selectedDifficulty;
-      b.className =
-        'px-4 py-2 rounded-full text-sm font-medium transition-colors ' +
-        (active
-          ? 'bg-accent text-base-900'
-          : 'bg-base-800 text-slate-300 hover:bg-base-700');
-    });
-  };
-  DIFFICULTIES.forEach((d) => {
-    const b = document.createElement('button');
-    b.textContent = d.label;
-    b.addEventListener('click', () => {
-      selectedDifficulty = d;
-      paint();
-    });
-    diffButtons.push(b);
-    diffRow.appendChild(b);
-  });
-  paint();
-  diffWrap.appendChild(diffRow);
-  container.appendChild(diffWrap);
-
   // Start
   const startBtn = document.createElement('button');
   startBtn.className =
@@ -133,7 +94,7 @@ export function renderSetup(
   startBtn.appendChild(document.createTextNode('Start Puzzle'));
   startBtn.addEventListener('click', () => {
     if (!selectedImage) return;
-    onStart({ image: selectedImage, difficulty: selectedDifficulty });
+    onStart({ image: selectedImage });
   });
   container.appendChild(startBtn);
 

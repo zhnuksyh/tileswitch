@@ -18,7 +18,7 @@ function showSetup(): void {
 }
 
 function startGame(setup: SetupResult): void {
-  renderGame(app!, setup.image, setup.difficulty, {
+  renderGame(app!, setup.image, {
     onExit: showSetup,
     onRestart: () => {
       if (lastSetup) startGame(lastSetup);

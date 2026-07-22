@@ -1,6 +1,5 @@
 import { Board } from '../game/board';
 import { computeGrid } from '../puzzle/grid';
-import type { Difficulty } from '../puzzle/grid';
 import { icon, icons } from './icons';
 
 // Hosts a running puzzle: header with progress + controls, the board itself,
@@ -14,21 +13,19 @@ export interface GameCallbacks {
 export function renderGame(
   root: HTMLElement,
   image: HTMLImageElement,
-  difficulty: Difficulty,
   cb: GameCallbacks,
 ): void {
   root.innerHTML = '';
 
-  const grid = computeGrid(image.naturalWidth, image.naturalHeight, difficulty.base);
+  const grid = computeGrid(image.naturalWidth, image.naturalHeight);
 
-  // Fit the target grid within roughly 70% of the smaller viewport dimension,
-  // leaving room for tray + header.
+  // Fit the grid within the viewport, leaving room for the header.
   const maxBoardW = Math.min(window.innerWidth - 48, 900);
-  const maxBoardH = window.innerHeight * 0.55;
+  const maxBoardH = window.innerHeight * 0.75;
   const cellSize = Math.floor(
     Math.min(maxBoardW / grid.cols, maxBoardH / grid.rows),
   );
-  const safeCell = Math.max(40, cellSize);
+  const safeCell = Math.max(48, cellSize);
 
   const container = document.createElement('div');
   container.className = 'min-h-screen w-full flex flex-col';
@@ -74,8 +71,8 @@ export function renderGame(
   root.appendChild(container);
 
   const board = new Board(boardArea, image, grid, safeCell, {
-    onProgress: (placed, total) => {
-      progress.textContent = `${placed} / ${total} pieces`;
+    onProgress: (correct, total) => {
+      progress.textContent = `${correct} / ${total} in place`;
     },
     onWin: () => showWin(root, board, cb),
   });
