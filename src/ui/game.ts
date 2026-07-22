@@ -3,6 +3,7 @@ import { computeGrid } from '../puzzle/grid';
 import { icon, icons } from './icons';
 import { isMuted, toggleMuted } from '../audio/sfx';
 import { animate } from './motion';
+import { burstConfetti } from './confetti';
 
 // Hosts a running puzzle: header with progress + controls, the board itself,
 // and a win overlay. Chooses a cell size that fits the viewport.
@@ -79,6 +80,23 @@ export function renderGame(
   });
   rightControls.appendChild(muteBtn);
 
+  // Peek: briefly reveal the completed image over the board as a hint.
+  const peekBtn = document.createElement('button');
+  peekBtn.className =
+    'flex items-center gap-2 px-4 py-2 rounded-full bg-base-800 hover:bg-base-700 transition-colors text-sm font-medium';
+  peekBtn.appendChild(icon(icons.peek, 'w-4 h-4'));
+  peekBtn.appendChild(document.createTextNode('Peek'));
+  peekBtn.setAttribute('aria-label', 'Peek at the full image');
+  peekBtn.addEventListener('click', () => {
+    board.peek();
+    animate(
+      peekBtn,
+      [{ transform: 'scale(0.9)' }, { transform: 'scale(1)' }],
+      { duration: 180, easing: 'ease-out' },
+    );
+  });
+  rightControls.appendChild(peekBtn);
+
   const restartBtn = document.createElement('button');
   restartBtn.className =
     'flex items-center gap-2 px-4 py-2 rounded-full bg-base-800 hover:bg-base-700 transition-colors text-sm font-medium';
@@ -112,7 +130,7 @@ export function renderGame(
 function showWin(root: HTMLElement, board: Board, cb: GameCallbacks): void {
   const overlay = document.createElement('div');
   overlay.className =
-    'fixed inset-0 z-[70] flex items-center justify-center bg-base-900/80 backdrop-blur-sm';
+    'fixed inset-0 z-[70] flex items-center justify-center bg-base-900/80 backdrop-blur-sm transition-all duration-300';
 
   const modal = document.createElement('div');
   modal.className =
@@ -128,8 +146,46 @@ function showWin(root: HTMLElement, board: Board, cb: GameCallbacks): void {
   p.textContent = 'Nicely done. Play again?';
   modal.appendChild(p);
 
+  // Confetti fires on show; kept so we can stop it if we leave early.
+  const stopConfetti = burstConfetti();
+
+  // A floating pill to restore the modal after viewing the finished image.
+  const backPill = document.createElement('button');
+  backPill.className =
+    'fixed bottom-8 left-1/2 -translate-x-1/2 z-[75] flex items-center gap-2 px-6 py-3 rounded-full bg-base-800/90 ring-1 ring-base-600 shadow-2xl text-sm font-semibold backdrop-blur-sm hidden';
+  backPill.appendChild(icon(icons.trophy, 'w-4 h-4 text-amber-400'));
+  backPill.appendChild(document.createTextNode('Back to results'));
+
+  const showModal = (visible: boolean) => {
+    if (visible) {
+      overlay.classList.remove('opacity-0', 'pointer-events-none');
+      backPill.classList.add('hidden');
+    } else {
+      // Fade the whole overlay out so the completed board shows behind it.
+      overlay.classList.add('opacity-0', 'pointer-events-none');
+      backPill.classList.remove('hidden');
+      animate(
+        backPill,
+        [
+          { opacity: 0, transform: 'translate(-50%, 12px)' },
+          { opacity: 1, transform: 'translate(-50%, 0)' },
+        ],
+        { duration: 260, easing: 'ease-out' },
+      );
+    }
+  };
+  backPill.addEventListener('click', () => showModal(true));
+
   const row = document.createElement('div');
-  row.className = 'flex gap-3 mt-2';
+  row.className = 'flex flex-wrap justify-center gap-3 mt-2';
+
+  const viewImage = document.createElement('button');
+  viewImage.className =
+    'flex items-center gap-2 px-6 py-2.5 rounded-full bg-base-700 hover:bg-base-600 transition-colors font-medium';
+  viewImage.appendChild(icon(icons.peek, 'w-4 h-4'));
+  viewImage.appendChild(document.createTextNode('View image'));
+  viewImage.addEventListener('click', () => showModal(false));
+  row.appendChild(viewImage);
 
   const again = document.createElement('button');
   again.className =
@@ -137,7 +193,9 @@ function showWin(root: HTMLElement, board: Board, cb: GameCallbacks): void {
   again.appendChild(icon(icons.restart, 'w-4 h-4'));
   again.appendChild(document.createTextNode('Play again'));
   again.addEventListener('click', () => {
+    stopConfetti();
     overlay.remove();
+    backPill.remove();
     board.destroy();
     cb.onRestart();
   });
@@ -149,7 +207,9 @@ function showWin(root: HTMLElement, board: Board, cb: GameCallbacks): void {
   menu.appendChild(icon(icons.back, 'w-4 h-4'));
   menu.appendChild(document.createTextNode('Menu'));
   menu.addEventListener('click', () => {
+    stopConfetti();
     overlay.remove();
+    backPill.remove();
     board.destroy();
     cb.onExit();
   });
@@ -158,6 +218,7 @@ function showWin(root: HTMLElement, board: Board, cb: GameCallbacks): void {
   modal.appendChild(row);
   overlay.appendChild(modal);
   root.appendChild(overlay);
+  root.appendChild(backPill);
 
   overlay.animate([{ opacity: 0 }, { opacity: 1 }], {
     duration: 200,

@@ -8,6 +8,7 @@ import {
   ArrowLeft,
   Volume2,
   VolumeX,
+  Eye,
   type IconNode,
 } from 'lucide';
 
@@ -30,4 +31,5 @@ export const icons = {
   back: ArrowLeft,
   soundOn: Volume2,
   soundOff: VolumeX,
+  peek: Eye,
 };
