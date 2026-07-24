@@ -61,7 +61,11 @@ function startGame(setup: SetupResult): void {
       onRestart: () => startGame(setup),
       onNext: () => void playNext(setup),
     },
-    { entry: setup.entry, library: setup.library },
+    {
+      entry: setup.entry,
+      library: setup.library,
+      difficultyLabel: setup.difficultyLabel,
+    },
   );
 }
 

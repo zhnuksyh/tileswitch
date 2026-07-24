@@ -13,7 +13,7 @@ const KEY = 'tileswitch:history:v1';
 
 // Cap the stored history so localStorage stays small and the grid stays
 // meaningful. Older entries fall off the end.
-const MAX_HISTORY = 24;
+const MAX_HISTORY = 10;
 
 export interface HistoryEntry {
   id: string;
@@ -21,7 +21,20 @@ export interface HistoryEntry {
   source: ImageSource;
   /** When it was last played (ms epoch). */
   playedAt: number;
+  /** Solve result, filled in on completion (absent until then). */
+  solvedAt?: number;
+  /** Fastest solve time in ms for this image (best of its plays). */
+  bestTimeMs?: number;
+  /** Difficulty label of the last solve (e.g. 'Easy'). */
+  difficulty?: string;
 }
+
+/** History entries carry their solve metadata alongside the resolved image. */
+export type HistoryItem = LibraryImage & {
+  solvedAt?: number;
+  bestTimeMs?: number;
+  difficulty?: string;
+};
 
 function load(): HistoryEntry[] {
   try {
@@ -65,15 +78,43 @@ export function recordPlayed(image: LibraryImage): void {
 }
 
 /**
- * Recently-played images, most-recent first, resolved against the current
- * library so each has a live `src`. Entries whose image is gone are dropped.
+ * Record that the puzzle for `id` was solved: stamps the solve time, keeps the
+ * best (fastest) time, and stores the difficulty label. No-op if the image
+ * isn't in history (it always should be, since play() records it first).
  */
-export function getHistory(library: LibraryImage[]): LibraryImage[] {
+export function recordSolved(
+  id: string,
+  timeMs: number,
+  difficulty: string,
+): void {
+  const entries = load();
+  const entry = entries.find((e) => e.id === id);
+  if (!entry) return;
+  entry.solvedAt = Date.now();
+  entry.difficulty = difficulty;
+  entry.bestTimeMs =
+    entry.bestTimeMs === undefined ? timeMs : Math.min(entry.bestTimeMs, timeMs);
+  save(entries);
+}
+
+/**
+ * Recently-played images, most-recent first, resolved against the current
+ * library so each has a live `src`. Solve metadata (time, date, difficulty)
+ * rides along. Entries whose image is gone are dropped.
+ */
+export function getHistory(library: LibraryImage[]): HistoryItem[] {
   const byId = new Map(library.map((i) => [i.id, i]));
-  const result: LibraryImage[] = [];
+  const result: HistoryItem[] = [];
   for (const entry of load()) {
     const live = byId.get(entry.id);
-    if (live) result.push(live);
+    if (live) {
+      result.push({
+        ...live,
+        solvedAt: entry.solvedAt,
+        bestTimeMs: entry.bestTimeMs,
+        difficulty: entry.difficulty,
+      });
+    }
   }
   return result;
 }
