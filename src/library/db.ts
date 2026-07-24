@@ -4,8 +4,11 @@
 // unlike localStorage's ~5 MB cap.
 
 const DB_NAME = 'tileswitch';
-const DB_VERSION = 1;
+const DB_VERSION = 2;
 const STORE = 'uploads';
+// Small key-value store for single-value app data (e.g. the custom background
+// image). Separate from `uploads` so library reads never see it.
+const KV_STORE = 'kv';
 
 let dbPromise: Promise<IDBDatabase> | null = null;
 
@@ -19,6 +22,9 @@ function openDb(): Promise<IDBDatabase> {
         // keyPath 'id'; addedAt index lets us read in insertion order.
         const store = db.createObjectStore(STORE, { keyPath: 'id' });
         store.createIndex('addedAt', 'addedAt');
+      }
+      if (!db.objectStoreNames.contains(KV_STORE)) {
+        db.createObjectStore(KV_STORE);
       }
     };
     req.onsuccess = () => resolve(req.result);
@@ -80,4 +86,33 @@ export function putUpload(entry: StoredUpload): Promise<IDBValidKey> {
 
 export function deleteUpload(id: string): Promise<undefined> {
   return tx('readwrite', (store) => store.delete(id));
+}
+
+// --- Key-value store (single-value app data) -------------------------------
+
+function kvTx<T>(
+  mode: IDBTransactionMode,
+  run: (store: IDBObjectStore) => IDBRequest<T>,
+): Promise<T> {
+  return openDb().then(
+    (db) =>
+      new Promise<T>((resolve, reject) => {
+        const t = db.transaction(KV_STORE, mode);
+        const req = run(t.objectStore(KV_STORE));
+        req.onsuccess = () => resolve(req.result);
+        req.onerror = () => reject(req.error);
+      }),
+  );
+}
+
+export function kvGet<T>(key: string): Promise<T | undefined> {
+  return kvTx('readonly', (store) => store.get(key) as IDBRequest<T | undefined>);
+}
+
+export function kvSet(key: string, value: unknown): Promise<IDBValidKey> {
+  return kvTx('readwrite', (store) => store.put(value, key));
+}
+
+export function kvDelete(key: string): Promise<undefined> {
+  return kvTx('readwrite', (store) => store.delete(key));
 }
