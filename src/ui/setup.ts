@@ -1,12 +1,15 @@
 import { icon, icons } from './icons';
-import { categories, type LibraryImage } from '../library/manifest';
+import { getLibrary, hasPersonalLibrary, type LibraryImage } from '../library/manifest';
+import { addUpload, removeUpload } from '../library/uploads';
+import { nextImage, markSeen } from '../library/rotation';
 import { play } from '../audio/sfx';
 import { animate } from './motion';
 import { DIFFICULTIES, DEFAULT_DIFFICULTY } from '../game/difficulty';
 
-// The setup screen: pick an image from the built-in library (organized into
-// category tabs) or upload your own, choose a difficulty, then start. Resolves
-// via the onStart callback with the chosen image and grid fineness.
+// The setup screen: your library is one shuffle pool (personal images from
+// /my-library, or public placeholders when that's empty, plus anything you've
+// dragged in). Hand-pick a thumbnail or hit Shuffle for the next non-repeated
+// image, choose a difficulty, then start.
 
 export interface SetupResult {
   image: HTMLImageElement;
@@ -14,15 +17,14 @@ export interface SetupResult {
   baseTiles: number;
 }
 
-type TabId = string; // category id, or 'upload'
-
 export function renderSetup(
   root: HTMLElement,
   onStart: (result: SetupResult) => void,
 ): void {
   let selectedImage: HTMLImageElement | null = null;
-  let selectedSrc: string | null = null;
+  let selectedId: string | null = null;
   let selectedDifficulty = DEFAULT_DIFFICULTY;
+  let library: LibraryImage[] = getLibrary();
 
   root.innerHTML = '';
 
@@ -61,20 +63,26 @@ export function renderSetup(
   preview.appendChild(previewImg);
   const previewHint = document.createElement('span');
   previewHint.className = 'absolute text-slate-500 text-sm';
-  previewHint.textContent = 'Pick an image to preview';
+  previewHint.textContent = 'Shuffle or pick an image to preview';
   preview.appendChild(previewHint);
   card.appendChild(preview);
 
-  const loadImage = (src: string) => {
+  const enableStart = () => {
+    startBtn.disabled = false;
+    startBtn.classList.remove('opacity-50', 'pointer-events-none');
+  };
+
+  // Load an image by library entry: sets it as the selection and previews it.
+  const selectImage = (entry: LibraryImage, options: { count?: boolean } = {}) => {
     const img = new Image();
     img.crossOrigin = 'anonymous';
     img.onload = () => {
       selectedImage = img;
-      selectedSrc = src;
-      previewImg.src = src;
+      selectedId = entry.id;
+      previewImg.src = entry.src;
       previewHint.classList.add('hidden');
-      startBtn.disabled = false;
-      startBtn.classList.remove('opacity-50', 'pointer-events-none');
+      enableStart();
+      if (options.count) markSeen(library, entry.id);
       refreshSelection();
       play('select');
       animate(
@@ -83,71 +91,101 @@ export function renderSetup(
         { duration: 260, easing: 'ease-out' },
       );
     };
-    img.src = src;
+    img.src = entry.src;
   };
 
-  // Tab strip: one per category, plus Upload.
-  const tabs: { id: TabId; label: string }[] = [
-    ...categories.map((c) => ({ id: c.id, label: c.label })),
-    { id: 'upload', label: 'Upload' },
-  ];
-  let activeTab: TabId = tabs[0].id;
+  // --- Shuffle bar -----------------------------------------------------------
+  const shuffleRow = document.createElement('div');
+  shuffleRow.className = 'flex items-center gap-3';
 
-  const tabRow = document.createElement('div');
-  tabRow.className = 'flex flex-wrap gap-2';
-  const tabButtons = new Map<TabId, HTMLButtonElement>();
-  for (const tab of tabs) {
-    const btn = document.createElement('button');
-    btn.className = tabClass(false);
-    btn.textContent = tab.label;
-    btn.addEventListener('click', () => {
-      activeTab = tab.id;
-      refreshTabs();
-      renderBody();
-    });
-    tabButtons.set(tab.id, btn);
-    tabRow.appendChild(btn);
-  }
-  card.appendChild(tabRow);
+  const shuffleBtn = document.createElement('button');
+  shuffleBtn.className =
+    'flex items-center gap-2 px-5 py-2.5 rounded-full bg-base-700 hover:bg-base-600 transition-colors text-sm font-semibold disabled:opacity-40 disabled:pointer-events-none';
+  shuffleBtn.appendChild(icon(icons.shuffle, 'w-4 h-4'));
+  shuffleBtn.appendChild(document.createTextNode('Shuffle'));
+  shuffleBtn.addEventListener('click', () => {
+    const entry = nextImage(library, selectedId ?? undefined);
+    if (!entry) return;
+    selectImage(entry, { count: true });
+  });
+  shuffleRow.appendChild(shuffleBtn);
 
-  const refreshTabs = () => {
-    for (const [id, btn] of tabButtons) {
-      btn.className = tabClass(id === activeTab);
-    }
-  };
+  const shuffleHint = document.createElement('span');
+  shuffleHint.className = 'text-xs text-slate-500';
+  shuffleRow.appendChild(shuffleHint);
+  card.appendChild(shuffleRow);
 
-  // Body area (swaps per tab).
-  const body = document.createElement('div');
-  card.appendChild(body);
-
-  // Track thumbnail buttons so we can move the selection ring.
+  // --- Library grid ----------------------------------------------------------
   const thumbButtons = new Map<string, HTMLButtonElement>();
 
   const refreshSelection = () => {
-    for (const [src, btn] of thumbButtons) {
-      btn.className = thumbClass(src === selectedSrc);
+    for (const [id, btn] of thumbButtons) {
+      btn.className = thumbClass(id === selectedId);
     }
   };
 
-  const renderBody = () => {
-    body.innerHTML = '';
+  const grid = document.createElement('div');
+  grid.className = 'grid grid-cols-3 gap-3';
+  card.appendChild(grid);
+
+  const sourceNote = document.createElement('p');
+  sourceNote.className = 'text-[11px] text-slate-500';
+  card.appendChild(sourceNote);
+
+  const renderGrid = () => {
+    grid.innerHTML = '';
     thumbButtons.clear();
-
-    if (activeTab === 'upload') {
-      renderUpload(body, loadImage);
-      return;
+    for (const image of library) {
+      grid.appendChild(
+        renderThumb(image, selectImage, thumbButtons, (id) => {
+          removeUpload(id);
+          refreshLibrary();
+        }),
+      );
     }
-    const category = categories.find((c) => c.id === activeTab);
-    if (!category) return;
-
-    const grid = document.createElement('div');
-    grid.className = 'grid grid-cols-3 gap-3';
-    for (const image of category.images) {
-      grid.appendChild(renderThumb(image, loadImage, thumbButtons));
-    }
-    body.appendChild(grid);
     refreshSelection();
+
+    const uploads = library.filter((i) => i.source === 'uploaded').length;
+    shuffleHint.textContent = library.length
+      ? `${library.length} in rotation`
+      : 'No images yet — add some below';
+    shuffleBtn.disabled = library.length === 0;
+    sourceNote.textContent = hasPersonalLibrary
+      ? `Your library (/my-library)${uploads ? ` + ${uploads} added here` : ''}`
+      : `Public placeholders${uploads ? ` + ${uploads} you added` : ''} — drop images in /my-library to make it yours`;
   };
+
+  // Re-read the pool after uploads change, keeping the current selection valid.
+  const refreshLibrary = () => {
+    library = getLibrary();
+    if (selectedId && !library.some((i) => i.id === selectedId)) {
+      selectedId = null;
+      selectedImage = null;
+      previewImg.removeAttribute('src');
+      previewHint.classList.remove('hidden');
+      startBtn.disabled = true;
+      startBtn.classList.add('opacity-50', 'pointer-events-none');
+    }
+    renderGrid();
+  };
+
+  // --- Add images (drag-drop + file select) ---------------------------------
+  const addZone = renderAddZone(async (files) => {
+    let firstAdded: LibraryImage | null = null;
+    for (const file of files) {
+      try {
+        const up = await addUpload(file);
+        if (!firstAdded) {
+          firstAdded = { id: up.id, title: up.title, src: up.dataUrl, source: 'uploaded' };
+        }
+      } catch (err) {
+        console.warn('Skipped a file:', err);
+      }
+    }
+    refreshLibrary();
+    if (firstAdded) selectImage(firstAdded);
+  });
+  card.appendChild(addZone);
 
   // Difficulty selector: sets how fine the tile grid is.
   const diffSection = document.createElement('div');
@@ -207,8 +245,7 @@ export function renderSetup(
 
   root.appendChild(container);
 
-  refreshTabs();
-  renderBody();
+  renderGrid();
 
   // Gentle entrance for the whole setup.
   animate(
@@ -221,14 +258,6 @@ export function renderSetup(
   );
 }
 
-function tabClass(active: boolean): string {
-  const base =
-    'px-4 py-1.5 rounded-full text-sm font-medium transition-colors';
-  return active
-    ? `${base} bg-accent text-base-900`
-    : `${base} bg-base-700 hover:bg-base-600 text-slate-200`;
-}
-
 function diffClass(active: boolean): string {
   const base =
     'flex flex-col items-center justify-center gap-0.5 px-2 py-2 rounded-xl transition-colors';
@@ -239,7 +268,7 @@ function diffClass(active: boolean): string {
 
 function thumbClass(selected: boolean): string {
   const base =
-    'relative aspect-video rounded-xl overflow-hidden bg-base-900 ring-1 transition-all';
+    'relative aspect-video rounded-xl overflow-hidden bg-base-900 ring-1 transition-all group';
   return selected
     ? `${base} ring-2 ring-accent`
     : `${base} ring-base-700 hover:ring-base-500`;
@@ -247,8 +276,9 @@ function thumbClass(selected: boolean): string {
 
 function renderThumb(
   image: LibraryImage,
-  onPick: (src: string) => void,
+  onPick: (image: LibraryImage) => void,
   registry: Map<string, HTMLButtonElement>,
+  onRemove: (id: string) => void,
 ): HTMLButtonElement {
   const btn = document.createElement('button');
   btn.className = thumbClass(false);
@@ -267,41 +297,87 @@ function renderThumb(
   label.textContent = image.title;
   btn.appendChild(label);
 
-  btn.addEventListener('click', () => onPick(image.src));
-  registry.set(image.src, btn);
+  // Uploaded images can be removed.
+  if (image.source === 'uploaded') {
+    const del = document.createElement('span');
+    del.className =
+      'absolute top-1 right-1 grid place-items-center w-6 h-6 rounded-full bg-black/60 text-white opacity-0 group-hover:opacity-100 hover:bg-red-500 transition-opacity';
+    del.setAttribute('role', 'button');
+    del.title = 'Remove';
+    del.appendChild(icon(icons.trash, 'w-3.5 h-3.5'));
+    del.addEventListener('click', (e) => {
+      e.stopPropagation();
+      play('select');
+      onRemove(image.id);
+    });
+    btn.appendChild(del);
+  }
+
+  btn.addEventListener('click', () => onPick(image));
+  registry.set(image.id, btn);
   return btn;
 }
 
-function renderUpload(
-  body: HTMLElement,
-  onPick: (src: string) => void,
-): void {
-  const wrap = document.createElement('div');
-  wrap.className = 'flex flex-col items-center gap-3 py-4';
+// Drag-and-drop zone with a file-select fallback. Calls back with picked files.
+function renderAddZone(
+  onFiles: (files: File[]) => void,
+): HTMLElement {
+  const zone = document.createElement('div');
+  zone.className =
+    'flex flex-col items-center gap-2 py-5 px-4 rounded-2xl border-2 border-dashed border-base-700 text-center transition-colors';
 
   const fileInput = document.createElement('input');
   fileInput.type = 'file';
   fileInput.accept = 'image/*';
+  fileInput.multiple = true;
   fileInput.className = 'hidden';
   fileInput.addEventListener('change', () => {
-    const file = fileInput.files?.[0];
-    if (!file) return;
-    onPick(URL.createObjectURL(file));
+    const files = fileInput.files ? Array.from(fileInput.files) : [];
+    if (files.length) onFiles(files);
+    fileInput.value = '';
   });
 
-  const uploadBtn = document.createElement('button');
-  uploadBtn.className =
-    'flex items-center gap-2 px-5 py-2.5 rounded-full bg-base-700 hover:bg-base-600 transition-colors text-sm font-medium';
-  uploadBtn.appendChild(icon(icons.upload, 'w-4 h-4'));
-  uploadBtn.appendChild(document.createTextNode('Choose image'));
-  uploadBtn.addEventListener('click', () => fileInput.click());
+  const iconWrap = icon(icons.upload, 'w-6 h-6 text-slate-400');
+  zone.appendChild(iconWrap);
+
+  const chooseBtn = document.createElement('button');
+  chooseBtn.className =
+    'flex items-center gap-2 px-5 py-2 rounded-full bg-base-700 hover:bg-base-600 transition-colors text-sm font-medium';
+  chooseBtn.appendChild(document.createTextNode('Choose images'));
+  chooseBtn.addEventListener('click', () => fileInput.click());
+  zone.appendChild(chooseBtn);
+  zone.appendChild(fileInput);
 
   const hint = document.createElement('p');
   hint.className = 'text-slate-500 text-xs';
-  hint.textContent = 'Any picture from your device works.';
+  hint.textContent = 'or drag & drop here — saved to your library on this device';
+  zone.appendChild(hint);
 
-  wrap.appendChild(uploadBtn);
-  wrap.appendChild(fileInput);
-  wrap.appendChild(hint);
-  body.appendChild(wrap);
+  // Drag styling + drop handling.
+  const highlight = (on: boolean) => {
+    zone.classList.toggle('border-accent', on);
+    zone.classList.toggle('bg-accent/5', on);
+  };
+  ['dragenter', 'dragover'].forEach((ev) =>
+    zone.addEventListener(ev, (e) => {
+      e.preventDefault();
+      highlight(true);
+    }),
+  );
+  ['dragleave', 'dragend'].forEach((ev) =>
+    zone.addEventListener(ev, (e) => {
+      e.preventDefault();
+      highlight(false);
+    }),
+  );
+  zone.addEventListener('drop', (e) => {
+    e.preventDefault();
+    highlight(false);
+    const dt = (e as DragEvent).dataTransfer;
+    if (!dt) return;
+    const files = Array.from(dt.files).filter((f) => f.type.startsWith('image/'));
+    if (files.length) onFiles(files);
+  });
+
+  return zone;
 }

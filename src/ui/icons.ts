@@ -9,6 +9,8 @@ import {
   Volume2,
   VolumeX,
   Eye,
+  Shuffle,
+  Trash2,
   type IconNode,
 } from 'lucide';
 
@@ -32,4 +34,6 @@ export const icons = {
   soundOn: Volume2,
   soundOff: VolumeX,
   peek: Eye,
+  shuffle: Shuffle,
+  trash: Trash2,
 };
