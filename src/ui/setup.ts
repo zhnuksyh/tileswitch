@@ -68,28 +68,34 @@ export function renderSetup(
   header.appendChild(sub);
   container.appendChild(header);
 
-  // Two-column shell: on desktop the left column is the preview + upload box,
-  // the right column is the library grid + difficulty + start. On mobile it
-  // collapses to a single stacked column (order tuned in each panel below).
+  // Two-row, two-column shell. Each row is its own grid with `items-stretch`
+  // so the left and right cards in a row share the same height — their top and
+  // bottom edges line up on the same lines for a clean, aligned look. On mobile
+  // everything collapses to a single stacked column.
+  //   Row 1: preview  (left)  ·  library grid (right)
+  //   Row 2: upload    (left)  ·  difficulty + start (right)
   const layout = document.createElement('div');
-  layout.className =
-    'w-full max-w-5xl grid grid-cols-1 lg:grid-cols-2 gap-5 lg:items-start';
+  layout.className = 'w-full max-w-5xl flex flex-col gap-5';
   container.appendChild(layout);
 
-  // ==== Left column: preview carousel + upload box ==========================
-  const leftCol = document.createElement('div');
-  leftCol.className = 'flex flex-col gap-5';
-  layout.appendChild(leftCol);
+  const row1 = document.createElement('div');
+  row1.className = 'grid grid-cols-1 lg:grid-cols-2 gap-5 lg:items-stretch';
+  layout.appendChild(row1);
 
+  const row2 = document.createElement('div');
+  row2.className = 'grid grid-cols-1 lg:grid-cols-2 gap-5 lg:items-stretch';
+  layout.appendChild(row2);
+
+  // ==== Row 1 left: preview carousel =======================================
   const previewCard = document.createElement('div');
   previewCard.className =
-    'flex flex-col gap-3 p-5 rounded-3xl bg-base-800/60 ring-1 ring-base-700';
+    'flex flex-col p-5 rounded-3xl bg-base-800/60 ring-1 ring-base-700';
 
-  // Preview frame. Two stacked <img> layers let us cross-slide between images
-  // for the carousel (one animates out while the next animates in).
+  // Preview frame. The image fills the card, so a taller card (matched to the
+  // grid's height) still crops cleanly.
   const preview = document.createElement('div');
   preview.className =
-    'relative w-full aspect-video rounded-2xl overflow-hidden bg-base-900 ring-1 ring-base-700 flex items-center justify-center';
+    'relative w-full flex-1 min-h-[12rem] aspect-video lg:aspect-auto rounded-2xl overflow-hidden bg-base-900 ring-1 ring-base-700 flex items-center justify-center';
   const previewImg = document.createElement('img');
   previewImg.className = 'absolute inset-0 w-full h-full object-cover';
   previewImg.alt = 'Puzzle preview';
@@ -99,27 +105,25 @@ export function renderSetup(
   previewHint.textContent = 'Pick an image to preview';
   preview.appendChild(previewHint);
   previewCard.appendChild(preview);
+  row1.appendChild(previewCard);
 
-  const previewTitle = document.createElement('p');
-  previewTitle.className = 'text-sm font-medium text-slate-300 text-center truncate min-h-[1.25rem]';
-  previewCard.appendChild(previewTitle);
-  leftCol.appendChild(previewCard);
-
-  // Upload box (its own card, under the preview on desktop).
-  const uploadCard = document.createElement('div');
-  uploadCard.className =
-    'p-5 rounded-3xl bg-base-800/60 ring-1 ring-base-700';
-  leftCol.appendChild(uploadCard);
-
-  // ==== Right column: library grid + difficulty + start ====================
-  const rightCol = document.createElement('div');
-  rightCol.className = 'flex flex-col gap-5';
-  layout.appendChild(rightCol);
-
+  // ==== Row 1 right: library grid ==========================================
   const libraryCard = document.createElement('div');
   libraryCard.className =
     'flex flex-col gap-4 p-5 rounded-3xl bg-base-800/60 ring-1 ring-base-700';
-  rightCol.appendChild(libraryCard);
+  row1.appendChild(libraryCard);
+
+  // ==== Row 2 left: upload box =============================================
+  const uploadCard = document.createElement('div');
+  uploadCard.className =
+    'flex p-5 rounded-3xl bg-base-800/60 ring-1 ring-base-700';
+
+  // ==== Row 2 right column: difficulty + start =============================
+  const rightCol = document.createElement('div');
+  rightCol.className = 'flex flex-col gap-5';
+
+  row2.appendChild(uploadCard);
+  row2.appendChild(rightCol);
 
   const libHead = document.createElement('div');
   libHead.className = 'flex items-center justify-between gap-3';
@@ -170,7 +174,6 @@ export function renderSetup(
   let slideDir = 1;
   const setPreview = (entry: LibraryImage, dir: 'left' | 'right' | 'auto' | 'none') => {
     previewImg.src = entry.src;
-    previewTitle.textContent = entry.title;
     previewHint.classList.add('hidden');
     if (dir === 'none') return;
     let from = 'translateX(0)';
@@ -255,15 +258,20 @@ export function renderSetup(
     grid.innerHTML = '';
     thumbButtons.clear();
 
-    // Show the first five images inline; if there are six or more, the sixth
-    // cell becomes "View more" opening the full-library modal. With five or
-    // fewer, every image shows and there's no view-more cell.
-    const inlineCount = library.length > 6 ? 5 : 6;
+    const uploads = uploadCount();
+    const showingPlaceholders = uploads === 0;
+
+    // Placeholder set (no uploads): show all five, then an "Add image" tile in
+    // the sixth cell that opens the upload dialog. Uploaded library: show up to
+    // six inline; beyond six the sixth cell becomes "View more".
+    const inlineCount = !showingPlaceholders && library.length > 6 ? 5 : 6;
     const inline = library.slice(0, inlineCount);
     for (const image of inline) {
       grid.appendChild(renderThumb(image, selectImage, thumbButtons, onRemove));
     }
-    if (library.length > 6) {
+    if (showingPlaceholders) {
+      grid.appendChild(renderAddTile(() => openUploadDialog()));
+    } else if (library.length > 6) {
       grid.appendChild(
         renderViewMore(library.length - inline.length, () => showLibraryModal()),
       );
@@ -271,7 +279,6 @@ export function renderSetup(
 
     refreshSelection();
 
-    const uploads = uploadCount();
     shuffleBtn.disabled = library.length === 0;
     sourceNote.textContent = uploads
       ? `Your library — ${uploads} / ${MAX_LIBRARY_IMAGES} images`
@@ -289,7 +296,12 @@ export function renderSetup(
   // Re-read the pool after uploads change, keeping the current selection valid.
   const refreshLibrary = async () => {
     const first = library.length === 0;
+    // Whether the image currently on screen still exists after the refresh.
+    const shownId = selectedId ?? carouselId;
+
     library = await getLibrary();
+
+    // The selected image was removed — drop the selection.
     if (selectedId && !library.some((i) => i.id === selectedId)) {
       selectedId = null;
       selectedImage = null;
@@ -298,23 +310,37 @@ export function renderSetup(
     }
     renderGrid();
 
-    // On first population, seed the carousel with a random image and start it.
-    if (first && library.length > 0 && !selectedId) {
+    // First population: seed the carousel with a random image and start it.
+    if (first && library.length > 0) {
       const entry = nextImage(library, undefined);
       if (entry) {
         previewOnly(entry, 'none');
         if (autoRotate) scheduleRotation();
       }
-    } else if (library.length === 0) {
-      stopRotation();
-      previewImg.removeAttribute('src');
-      previewTitle.textContent = '';
-      previewHint.classList.remove('hidden');
+      return;
+    }
+
+    // The image on screen no longer exists (it was removed) — advance the
+    // preview to another image immediately rather than leaving a stale/blank
+    // frame. Slide it in like a carousel step.
+    if (shownId && !library.some((i) => i.id === shownId)) {
+      const entry = nextImage(library, shownId);
+      if (entry) {
+        previewOnly(entry, 'auto');
+        if (autoRotate) scheduleRotation();
+      } else {
+        // Library is genuinely empty (shouldn't happen while placeholders
+        // exist, but guard anyway).
+        stopRotation();
+        carouselId = null;
+        previewImg.removeAttribute('src');
+        previewHint.classList.remove('hidden');
+      }
     }
   };
 
   // --- Add images (drag-drop + file select) ---------------------------------
-  const addZone = renderAddZone(async (files) => {
+  const handleFiles = async (files: File[]) => {
     const room = MAX_LIBRARY_IMAGES - uploadCount();
     if (room <= 0) {
       showLimitDialog(container, uploadCount(), 0, files.length);
@@ -337,7 +363,27 @@ export function renderSetup(
       showLimitDialog(container, uploadCount(), added.length, rejected);
     }
     void failed;
+  };
+
+  // Hidden file input backing the grid's "Add image" tile — a direct file
+  // picker without needing the drag-drop card.
+  const gridFileInput = document.createElement('input');
+  gridFileInput.type = 'file';
+  gridFileInput.accept = 'image/*';
+  gridFileInput.multiple = true;
+  gridFileInput.className = 'hidden';
+  gridFileInput.addEventListener('change', () => {
+    const files = gridFileInput.files ? Array.from(gridFileInput.files) : [];
+    gridFileInput.value = '';
+    if (files.length) void handleFiles(files);
   });
+  container.appendChild(gridFileInput);
+  const openUploadDialog = () => {
+    play('select');
+    gridFileInput.click();
+  };
+
+  const addZone = renderAddZone((files) => void handleFiles(files));
   uploadCard.appendChild(addZone);
 
   // Difficulty selector: sets how fine the tile grid is.
@@ -470,6 +516,22 @@ function renderThumb(
   return btn;
 }
 
+// The "Add image" tile — the 6th cell of the placeholder grid. Opens the
+// upload dialog so the user can start their own library.
+function renderAddTile(onClick: () => void): HTMLButtonElement {
+  const btn = document.createElement('button');
+  btn.className =
+    'flex flex-col items-center justify-center gap-1 aspect-video rounded-xl bg-base-900 border-2 border-dashed border-base-600 hover:border-accent hover:bg-accent/5 text-slate-300 transition-colors';
+  btn.title = 'Add your own image';
+  btn.appendChild(icon(icons.upload, 'w-6 h-6'));
+  const label = document.createElement('span');
+  label.className = 'text-xs font-semibold';
+  label.textContent = 'Add image';
+  btn.appendChild(label);
+  btn.addEventListener('click', onClick);
+  return btn;
+}
+
 // The "View more" tile — the 6th cell when the library holds more than six
 // images. `hidden` is how many images aren't shown inline.
 function renderViewMore(hidden: number, onClick: () => void): HTMLButtonElement {
@@ -576,7 +638,7 @@ function renderAddZone(
 ): HTMLElement {
   const zone = document.createElement('div');
   zone.className =
-    'flex flex-col items-center gap-2 py-5 px-4 rounded-2xl border-2 border-dashed border-base-700 text-center transition-colors';
+    'flex flex-col items-center justify-center gap-2 flex-1 py-5 px-4 rounded-2xl border-2 border-dashed border-base-700 text-center transition-colors';
 
   const fileInput = document.createElement('input');
   fileInput.type = 'file';
@@ -883,7 +945,9 @@ function showSettings(host: HTMLElement): void {
   bgReset.appendChild(document.createTextNode('Reset to Void'));
   paintReset();
   bgReset.addEventListener('click', () => {
-    void clearBackground().then(paintReset);
+    clearBackground()
+      .catch((err) => console.warn('Could not clear background.', err))
+      .finally(paintReset);
     play('select');
   });
 
@@ -891,7 +955,9 @@ function showSettings(host: HTMLElement): void {
     const file = bgInput.files?.[0];
     bgInput.value = '';
     if (!file || !file.type.startsWith('image/')) return;
-    void setBackground(file).then(paintReset);
+    setBackground(file)
+      .catch((err) => console.warn('Could not set background.', err))
+      .finally(paintReset);
     play('select');
   });
 
