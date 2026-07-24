@@ -940,7 +940,7 @@ function renderHistoryThumb(
   if (hasNote(image.id)) {
     const dot = document.createElement('span');
     dot.className =
-      'absolute top-1.5 right-1.5 grid place-items-center w-5 h-5 rounded-full bg-accent text-base-900 shadow';
+      'absolute top-1.5 left-1.5 grid place-items-center w-5 h-5 rounded-full bg-accent text-base-900 shadow';
     dot.title = 'Has a note';
     dot.appendChild(icon(icons.note, 'w-3 h-3'));
     frame.appendChild(dot);
@@ -951,7 +951,7 @@ function renderHistoryThumb(
   if (onDelete) {
     const del = document.createElement('span');
     del.className =
-      'absolute top-1 left-1 grid place-items-center w-6 h-6 rounded-full bg-black/60 text-white opacity-0 group-hover:opacity-100 hover:bg-red-500 transition-opacity';
+      'absolute top-1 right-1 grid place-items-center w-6 h-6 rounded-full bg-black/60 text-white opacity-0 group-hover:opacity-100 hover:bg-red-500 transition-opacity';
     del.setAttribute('role', 'button');
     del.title = 'Remove from history';
     del.appendChild(icon(icons.trash, 'w-3.5 h-3.5'));
