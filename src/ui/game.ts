@@ -23,6 +23,77 @@ function formatTime(ms: number): string {
   return `${m}:${s.toString().padStart(2, '0')}`;
 }
 
+interface ConfirmOptions {
+  title: string;
+  message: string;
+  confirmLabel: string;
+  onConfirm: () => void;
+}
+
+/** A small yes/no modal. Cancel just dismisses; confirm runs onConfirm. */
+function confirmDialog(root: HTMLElement, opts: ConfirmOptions): void {
+  const overlay = document.createElement('div');
+  overlay.className =
+    'fixed inset-0 z-[80] flex items-center justify-center p-6 bg-black/60 backdrop-blur-sm';
+
+  const modal = document.createElement('div');
+  modal.className =
+    'flex flex-col gap-4 p-6 rounded-3xl bg-base-800 ring-1 ring-base-700 w-full max-w-sm text-center shadow-2xl';
+
+  const h = document.createElement('h2');
+  h.className = 'text-lg font-semibold';
+  h.textContent = opts.title;
+  modal.appendChild(h);
+
+  const p = document.createElement('p');
+  p.className = 'text-sm text-slate-400';
+  p.textContent = opts.message;
+  modal.appendChild(p);
+
+  const row = document.createElement('div');
+  row.className = 'flex gap-3 mt-1';
+
+  const close = () => {
+    const anim = animate(overlay, [{ opacity: 1 }, { opacity: 0 }], { duration: 150 });
+    if (anim) anim.finished.then(() => overlay.remove());
+    else overlay.remove();
+  };
+
+  const cancel = document.createElement('button');
+  cancel.className =
+    'flex-1 px-5 py-2.5 rounded-full bg-base-700 hover:bg-base-600 transition-colors font-medium';
+  cancel.textContent = 'Keep playing';
+  cancel.addEventListener('click', close);
+  row.appendChild(cancel);
+
+  const confirm = document.createElement('button');
+  confirm.className =
+    'flex-1 px-5 py-2.5 rounded-full bg-red-500 hover:bg-red-400 text-white font-semibold transition-colors';
+  confirm.textContent = opts.confirmLabel;
+  confirm.addEventListener('click', () => {
+    close();
+    opts.onConfirm();
+  });
+  row.appendChild(confirm);
+
+  modal.appendChild(row);
+  overlay.addEventListener('click', (e) => {
+    if (e.target === overlay) close();
+  });
+  overlay.appendChild(modal);
+  root.appendChild(overlay);
+
+  animate(overlay, [{ opacity: 0 }, { opacity: 1 }], { duration: 150 });
+  animate(
+    modal,
+    [
+      { opacity: 0, transform: 'scale(0.95) translateY(8px)' },
+      { opacity: 1, transform: 'scale(1) translateY(0)' },
+    ],
+    { duration: 220, easing: 'cubic-bezier(0.22, 1, 0.36, 1)' },
+  );
+}
+
 export function renderGame(
   root: HTMLElement,
   image: HTMLImageElement,
@@ -60,44 +131,45 @@ export function renderGame(
   const container = document.createElement('div');
   container.className = 'min-h-screen w-full flex flex-col';
 
-  // Header
+  // Header. Menu sits alone on the left; everything else (stats + controls)
+  // groups on the right. No divider under it.
   const header = document.createElement('header');
-  header.className =
-    'flex items-center justify-between gap-4 px-5 py-4 border-b border-base-700/60';
+  header.className = 'flex items-center justify-between gap-4 px-5 py-4';
 
   const backBtn = document.createElement('button');
   backBtn.className =
     'flex items-center gap-2 px-4 py-2 rounded-full bg-base-800 hover:bg-base-700 transition-colors text-sm font-medium';
   backBtn.appendChild(icon(icons.back, 'w-4 h-4'));
   backBtn.appendChild(document.createTextNode('Menu'));
-  backBtn.addEventListener('click', () => {
-    board.destroy();
-    cb.onExit();
-  });
+  // Confirm-on-exit is wired below (needs `board`); handler set after it exists.
   header.appendChild(backBtn);
 
-  // Center cluster: progress, plus optional timer and streak chips.
-  const centerCluster = document.createElement('div');
-  centerCluster.className = 'flex items-center gap-3 text-sm font-medium tabular-nums';
+  // Right group: stat chips followed by icon-only controls.
+  const rightControls = document.createElement('div');
+  rightControls.className = 'flex items-center gap-2';
 
-  const progress = document.createElement('div');
-  progress.className = 'text-slate-300';
-  centerCluster.appendChild(progress);
+  // Progress chip (always shown).
+  const progressChip = document.createElement('div');
+  progressChip.className =
+    'flex items-center gap-1.5 px-2.5 py-1 rounded-full bg-base-800 text-sm font-medium tabular-nums text-slate-200';
+  const progress = document.createElement('span');
+  progressChip.appendChild(progress);
+  rightControls.appendChild(progressChip);
 
   // Live timer chip (only when enabled).
   const timerChip = document.createElement('div');
   timerChip.className =
-    'flex items-center gap-1.5 px-2.5 py-1 rounded-full bg-base-800 text-slate-200';
+    'flex items-center gap-1.5 px-2.5 py-1 rounded-full bg-base-800 text-sm font-medium tabular-nums text-slate-200';
   timerChip.appendChild(icon(icons.timer, 'w-3.5 h-3.5 text-slate-400'));
   const timerText = document.createElement('span');
   timerText.textContent = '0:00';
   timerChip.appendChild(timerText);
-  if (settings.timer) centerCluster.appendChild(timerChip);
+  if (settings.timer) rightControls.appendChild(timerChip);
 
-  // Streak chip (only when enabled and there's a live streak to show).
+  // Streak chip (only when enabled; visible once a streak exists).
   const streakChip = document.createElement('div');
   streakChip.className =
-    'flex items-center gap-1.5 px-2.5 py-1 rounded-full bg-amber-500/15 text-amber-300';
+    'flex items-center gap-1.5 px-2.5 py-1 rounded-full bg-amber-500/15 text-sm font-medium tabular-nums text-amber-300';
   streakChip.appendChild(icon(icons.streak, 'w-3.5 h-3.5'));
   const streakText = document.createElement('span');
   streakChip.appendChild(streakText);
@@ -107,59 +179,56 @@ export function renderGame(
     streakChip.classList.toggle('hidden', !(settings.streak && cur > 0));
   };
   refreshStreakChip();
-  if (settings.streak) centerCluster.appendChild(streakChip);
+  if (settings.streak) rightControls.appendChild(streakChip);
 
-  header.appendChild(centerCluster);
+  // A thin spacer so chips and control buttons read as two groups.
+  const spacer = document.createElement('div');
+  spacer.className = 'w-px h-6 bg-base-700/70 mx-1';
+  rightControls.appendChild(spacer);
 
-  const rightControls = document.createElement('div');
-  rightControls.className = 'flex items-center gap-2';
+  // Icon-only control button factory.
+  const iconBtn = (label: string): HTMLButtonElement => {
+    const b = document.createElement('button');
+    b.className =
+      'flex items-center justify-center w-10 h-10 rounded-full bg-base-800 hover:bg-base-700 transition-colors';
+    b.setAttribute('aria-label', label);
+    b.title = label;
+    return b;
+  };
 
   // Mute toggle. Icon reflects current state; click flips and persists it.
-  const muteBtn = document.createElement('button');
-  muteBtn.className =
-    'flex items-center justify-center w-10 h-10 rounded-full bg-base-800 hover:bg-base-700 transition-colors';
-  muteBtn.setAttribute('aria-label', 'Toggle sound');
+  const muteBtn = iconBtn('Toggle sound');
   const renderMuteIcon = () => {
     muteBtn.innerHTML = '';
-    muteBtn.appendChild(
-      icon(isMuted() ? icons.soundOff : icons.soundOn, 'w-4 h-4'),
-    );
+    muteBtn.appendChild(icon(isMuted() ? icons.soundOff : icons.soundOn, 'w-4 h-4'));
     muteBtn.title = isMuted() ? 'Sound off' : 'Sound on';
   };
   renderMuteIcon();
   muteBtn.addEventListener('click', () => {
     toggleMuted();
     renderMuteIcon();
-    animate(
-      muteBtn,
-      [{ transform: 'scale(0.85)' }, { transform: 'scale(1)' }],
-      { duration: 180, easing: 'ease-out' },
-    );
+    animate(muteBtn, [{ transform: 'scale(0.85)' }, { transform: 'scale(1)' }], {
+      duration: 180,
+      easing: 'ease-out',
+    });
   });
   rightControls.appendChild(muteBtn);
 
   // Peek: briefly reveal the completed image over the board as a hint.
-  const peekBtn = document.createElement('button');
-  peekBtn.className =
-    'flex items-center gap-2 px-4 py-2 rounded-full bg-base-800 hover:bg-base-700 transition-colors text-sm font-medium';
+  const peekBtn = iconBtn('Peek at the full image');
   peekBtn.appendChild(icon(icons.peek, 'w-4 h-4'));
-  peekBtn.appendChild(document.createTextNode('Peek'));
-  peekBtn.setAttribute('aria-label', 'Peek at the full image');
   peekBtn.addEventListener('click', () => {
     board.peek();
-    animate(
-      peekBtn,
-      [{ transform: 'scale(0.9)' }, { transform: 'scale(1)' }],
-      { duration: 180, easing: 'ease-out' },
-    );
+    animate(peekBtn, [{ transform: 'scale(0.9)' }, { transform: 'scale(1)' }], {
+      duration: 180,
+      easing: 'ease-out',
+    });
   });
   rightControls.appendChild(peekBtn);
 
-  const restartBtn = document.createElement('button');
-  restartBtn.className =
-    'flex items-center gap-2 px-4 py-2 rounded-full bg-base-800 hover:bg-base-700 transition-colors text-sm font-medium';
+  // Restart.
+  const restartBtn = iconBtn('Restart puzzle');
   restartBtn.appendChild(icon(icons.restart, 'w-4 h-4'));
-  restartBtn.appendChild(document.createTextNode('Restart'));
   restartBtn.addEventListener('click', () => {
     board.destroy();
     cb.onRestart();
@@ -191,7 +260,7 @@ export function renderGame(
 
   const board = new Board(boardCenter, image, grid, safeCell, {
     onProgress: (correct, total) => {
-      progress.textContent = `${correct} / ${total} in place`;
+      progress.textContent = `${correct} / ${total}`;
     },
     onMove: (m) => {
       moves = m;
@@ -228,13 +297,33 @@ export function renderGame(
     },
   });
 
-  // Exiting or restarting a puzzle mid-solve breaks the streak.
-  const abandonIfUnfinished = () => {
+  // Leaving to the menu mid-solve abandons the puzzle (and breaks the streak),
+  // so confirm first when the puzzle isn't done.
+  const leaveToMenu = () => {
     stopTimer();
     if (!finished && settings.streak) breakStreak();
+    board.destroy();
+    cb.onExit();
   };
-  backBtn.addEventListener('click', abandonIfUnfinished);
-  restartBtn.addEventListener('click', abandonIfUnfinished);
+  backBtn.addEventListener('click', () => {
+    if (finished || board.progress === 0) {
+      leaveToMenu();
+      return;
+    }
+    confirmDialog(root, {
+      title: 'Leave this puzzle?',
+      message: settings.streak
+        ? 'Your progress will be lost and your win streak will reset.'
+        : 'Your progress on this puzzle will be lost.',
+      confirmLabel: 'Leave',
+      onConfirm: leaveToMenu,
+    });
+  });
+
+  // Restarting also breaks the streak (a fresh attempt), but no confirm.
+  restartBtn.addEventListener('click', () => {
+    if (!finished && settings.streak) breakStreak();
+  });
 
   // Reveal the finished picture, then shuffle into play.
   board.start(1200);
