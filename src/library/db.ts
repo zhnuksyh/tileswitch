@@ -1,0 +1,71 @@
+// Minimal IndexedDB wrapper for the uploads store. IndexedDB holds Blobs
+// directly (no base64 bloat) and its quota is browser-managed storage —
+// hundreds of MB to GBs — so a real personal library of many images fits,
+// unlike localStorage's ~5 MB cap.
+
+const DB_NAME = 'tileswitch';
+const DB_VERSION = 1;
+const STORE = 'uploads';
+
+let dbPromise: Promise<IDBDatabase> | null = null;
+
+function openDb(): Promise<IDBDatabase> {
+  if (dbPromise) return dbPromise;
+  dbPromise = new Promise((resolve, reject) => {
+    const req = indexedDB.open(DB_NAME, DB_VERSION);
+    req.onupgradeneeded = () => {
+      const db = req.result;
+      if (!db.objectStoreNames.contains(STORE)) {
+        // keyPath 'id'; addedAt index lets us read in insertion order.
+        const store = db.createObjectStore(STORE, { keyPath: 'id' });
+        store.createIndex('addedAt', 'addedAt');
+      }
+    };
+    req.onsuccess = () => resolve(req.result);
+    req.onerror = () => reject(req.error);
+  });
+  return dbPromise;
+}
+
+function tx<T>(
+  mode: IDBTransactionMode,
+  run: (store: IDBObjectStore) => IDBRequest<T>,
+): Promise<T> {
+  return openDb().then(
+    (db) =>
+      new Promise<T>((resolve, reject) => {
+        const t = db.transaction(STORE, mode);
+        const req = run(t.objectStore(STORE));
+        req.onsuccess = () => resolve(req.result);
+        req.onerror = () => reject(req.error);
+      }),
+  );
+}
+
+export interface StoredUpload {
+  id: string;
+  title: string;
+  blob: Blob;
+  type: string;
+  addedAt: number;
+}
+
+/** All uploads, oldest first. */
+export async function getAllUploads(): Promise<StoredUpload[]> {
+  const db = await openDb();
+  return new Promise((resolve, reject) => {
+    const t = db.transaction(STORE, 'readonly');
+    const index = t.objectStore(STORE).index('addedAt');
+    const req = index.getAll();
+    req.onsuccess = () => resolve(req.result as StoredUpload[]);
+    req.onerror = () => reject(req.error);
+  });
+}
+
+export function putUpload(entry: StoredUpload): Promise<IDBValidKey> {
+  return tx('readwrite', (store) => store.put(entry));
+}
+
+export function deleteUpload(id: string): Promise<undefined> {
+  return tx('readwrite', (store) => store.delete(id));
+}

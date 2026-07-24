@@ -1,47 +1,48 @@
-// Images the user adds at runtime (drag-drop or file-select) are stored as
-// data URLs in localStorage so they persist across sessions and join the
-// library pool alongside personal/public images.
+// Images the user adds at runtime (drag-drop or file-select). Stored as Blobs
+// in IndexedDB (see db.ts) and re-encoded to WebP on the way in (see encode.ts)
+// so a large personal library stays light. Each stored Blob is exposed to the
+// UI as an object URL, cached by id so repeated reads don't leak URLs.
+
+import { getAllUploads, putUpload, deleteUpload, type StoredUpload } from './db';
+import { encodeForStorage } from './encode';
 
 export interface UploadedImage {
   id: string;
   title: string;
-  /** data:image/...;base64,... — self-contained, survives reloads. */
-  dataUrl: string;
-  /** Epoch ms, for stable ordering (newest last). */
+  /** Object URL for display, valid for the page's lifetime. */
+  url: string;
   addedAt: number;
 }
 
-const KEY = 'tileswitch:uploads:v1';
+// id -> { blob, url } so we reuse one object URL per image and can revoke it.
+const urlCache = new Map<string, { blob: Blob; url: string }>();
 
-/** Read the uploaded-image list, tolerating a corrupt/absent store. */
-export function loadUploads(): UploadedImage[] {
+function urlFor(id: string, blob: Blob): string {
+  const cached = urlCache.get(id);
+  if (cached && cached.blob === blob) return cached.url;
+  if (cached) URL.revokeObjectURL(cached.url);
+  const url = URL.createObjectURL(blob);
+  urlCache.set(id, { blob, url });
+  return url;
+}
+
+function toUploaded(s: StoredUpload): UploadedImage {
+  return { id: s.id, title: s.title, url: urlFor(s.id, s.blob), addedAt: s.addedAt };
+}
+
+/** Read all uploaded images, oldest first. */
+export async function loadUploads(): Promise<UploadedImage[]> {
   try {
-    const raw = localStorage.getItem(KEY);
-    if (!raw) return [];
-    const parsed = JSON.parse(raw);
-    if (!Array.isArray(parsed)) return [];
-    return parsed
-      .filter(
-        (u): u is UploadedImage =>
-          u && typeof u.id === 'string' && typeof u.dataUrl === 'string',
-      )
-      .sort((a, b) => (a.addedAt ?? 0) - (b.addedAt ?? 0));
-  } catch {
+    const rows = await getAllUploads();
+    return rows.map(toUploaded);
+  } catch (err) {
+    console.warn('Could not read uploaded images.', err);
     return [];
   }
 }
 
-function saveUploads(list: UploadedImage[]): void {
-  try {
-    localStorage.setItem(KEY, JSON.stringify(list));
-  } catch (err) {
-    // Most likely the localStorage quota (data URLs are large).
-    console.warn('Could not save uploaded image — storage may be full.', err);
-    throw err;
-  }
-}
-
-// Derive a title from an uploaded file's name (same rules as the README).
+// Derive a title from an uploaded file's name: drop extension and an optional
+// leading "NN-" ordering prefix, swap separators for spaces, title-case.
 function titleFromFile(fileName: string): string {
   const noExt = fileName.replace(/\.[^.]+$/, '');
   const noOrder = noExt.replace(/^\d+[-_ ]+/, '');
@@ -55,41 +56,32 @@ function titleFromFile(fileName: string): string {
   return t || 'Untitled';
 }
 
-function readAsDataUrl(file: File): Promise<string> {
-  return new Promise((resolve, reject) => {
-    const reader = new FileReader();
-    reader.onload = () => resolve(reader.result as string);
-    reader.onerror = () => reject(reader.error);
-    reader.readAsDataURL(file);
-  });
-}
-
 /**
- * Persist an image File as an upload and return its library entry data.
- * Non-images are rejected.
+ * Encode, store, and return an uploaded image. Non-images are rejected. May
+ * throw if IndexedDB is unavailable or storage is full.
  */
 export async function addUpload(file: File): Promise<UploadedImage> {
   if (!file.type.startsWith('image/')) {
     throw new Error('Not an image file.');
   }
-  const dataUrl = await readAsDataUrl(file);
-  const entry: UploadedImage = {
+  const encoded = await encodeForStorage(file);
+  const entry: StoredUpload = {
     id: `uploaded:${Date.now()}-${Math.random().toString(36).slice(2, 8)}`,
     title: titleFromFile(file.name),
-    dataUrl,
+    blob: encoded.blob,
+    type: encoded.type,
     addedAt: Date.now(),
   };
-  const list = loadUploads();
-  list.push(entry);
-  saveUploads(list);
-  return entry;
+  await putUpload(entry);
+  return toUploaded(entry);
 }
 
-/** Remove an uploaded image by id. Returns true if something was removed. */
-export function removeUpload(id: string): boolean {
-  const list = loadUploads();
-  const next = list.filter((u) => u.id !== id);
-  if (next.length === list.length) return false;
-  saveUploads(next);
-  return true;
+/** Remove an uploaded image by id. */
+export async function removeUpload(id: string): Promise<void> {
+  await deleteUpload(id);
+  const cached = urlCache.get(id);
+  if (cached) {
+    URL.revokeObjectURL(cached.url);
+    urlCache.delete(id);
+  }
 }

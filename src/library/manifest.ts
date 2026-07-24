@@ -1,25 +1,24 @@
-// The image library the puzzle draws from. Images come from three sources,
-// merged into one flat pool:
+// The image library the puzzle draws from. Two sources, merged into one flat
+// pool:
 //
-//   1. personal  — files you drop into /my-library (git-ignored, private),
-//                  auto-discovered at build/dev time via import.meta.glob.
-//   2. public    — 5 bundled placeholder images under /public/library, used as
-//                  a fallback so the app is never empty for a fresh visitor.
-//   3. uploaded  — images added at runtime via drag-drop / file-select, stored
-//                  as data URLs in localStorage (see uploads.ts).
+//   1. public   — 5 bundled placeholder images under /public/library. These are
+//                 the starter set everyone begins with.
+//   2. uploaded — images the user adds at runtime (drag-drop / file-select),
+//                 re-encoded to WebP and stored as Blobs in IndexedDB
+//                 (see uploads.ts / db.ts).
 //
-// The public set is only surfaced when there are no personal images, so once
-// you populate /my-library it becomes *your* library.
+// The public set shows only while the user has no uploads of their own; once
+// they add images, the library becomes theirs.
 
 import { loadUploads, type UploadedImage } from './uploads';
 
-export type ImageSource = 'personal' | 'public' | 'uploaded';
+export type ImageSource = 'public' | 'uploaded';
 
 export interface LibraryImage {
   /** Stable identity, unique across the whole pool. */
   id: string;
   title: string;
-  /** Resolvable URL: bundled asset URL, or a data: URL for uploads. */
+  /** Resolvable URL: bundled asset URL, or an object URL for uploads. */
   src: string;
   source: ImageSource;
 }
@@ -29,44 +28,9 @@ function asset(path: string): string {
   return import.meta.env.BASE_URL.replace(/\/$/, '') + path;
 }
 
-// Derive a display title from a file name: strip extension and an optional
-// leading "NN-" / "NN_" ordering prefix, swap separators for spaces, title-case.
-function titleFromFile(fileName: string): string {
-  const noExt = fileName.replace(/\.[^.]+$/, '');
-  const noOrder = noExt.replace(/^\d+[-_ ]+/, '');
-  return noOrder
-    .replace(/[-_]+/g, ' ')
-    .trim()
-    .replace(/\s+/g, ' ')
-    .split(' ')
-    .map((w) => (w ? w[0].toUpperCase() + w.slice(1) : w))
-    .join(' ');
-}
-
-// --- Source 1: personal /my-library, discovered at build time --------------
-// Eager glob so URLs are ready synchronously. Vite resolves each match to a
-// hashed asset URL. Keys are absolute module paths; we sort them so a numeric
-// filename prefix controls order.
-const personalModules = import.meta.glob(
-  '/my-library/*.{png,jpg,jpeg,webp,gif,avif}',
-  { eager: true, query: '?url', import: 'default' },
-) as Record<string, string>;
-
-const personalImages: LibraryImage[] = Object.keys(personalModules)
-  .sort()
-  .map((path) => {
-    const file = path.split('/').pop() ?? path;
-    return {
-      id: `personal:${file}`,
-      title: titleFromFile(file),
-      src: personalModules[path],
-      source: 'personal' as const,
-    };
-  });
-
-// --- Source 2: public placeholders (fallback only) -------------------------
-// Reuses 5 of the bundled library PNGs. Swap the files (same names) or edit
-// this list freely — these only appear when /my-library is empty.
+// --- Source 1: public placeholders (starter set) ---------------------------
+// Reuses 5 of the bundled library PNGs. Only shown while the user has no
+// uploads of their own.
 const PUBLIC_FILES: { file: string; title: string }[] = [
   { file: 'anime/spirited-away.png', title: 'Spirited Away' },
   { file: 'anime/your-name.png', title: 'Your Name' },
@@ -82,23 +46,18 @@ const publicImages: LibraryImage[] = PUBLIC_FILES.map(({ file, title }) => ({
   source: 'public' as const,
 }));
 
-/** Whether any personal images were discovered in /my-library. */
-export const hasPersonalLibrary = personalImages.length > 0;
-
 function uploadToImage(u: UploadedImage): LibraryImage {
-  return { id: u.id, title: u.title, src: u.dataUrl, source: 'uploaded' };
+  return { id: u.id, title: u.title, src: u.url, source: 'uploaded' };
 }
 
 /**
- * The full library pool, freshly assembled. Personal + uploaded images always
- * appear; the public placeholders are included only when there are no personal
- * images (a fresh visitor with an empty /my-library).
+ * The full library pool, freshly assembled. Uploaded images always appear; the
+ * public starter set is included only while the user has no uploads.
  *
- * Call this rather than caching — uploads live in localStorage and can change
- * while the app is open.
+ * Async because uploads live in IndexedDB. Call this rather than caching — the
+ * upload set can change while the app is open.
  */
-export function getLibrary(): LibraryImage[] {
-  const uploaded = loadUploads().map(uploadToImage);
-  const base = hasPersonalLibrary ? personalImages : publicImages;
-  return [...base, ...uploaded];
+export async function getLibrary(): Promise<LibraryImage[]> {
+  const uploaded = (await loadUploads()).map(uploadToImage);
+  return uploaded.length ? uploaded : publicImages;
 }

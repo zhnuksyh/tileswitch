@@ -1,21 +1,27 @@
 import { icon, icons } from './icons';
-import { getLibrary, hasPersonalLibrary, type LibraryImage } from '../library/manifest';
+import { getLibrary, type LibraryImage } from '../library/manifest';
 import { addUpload, removeUpload } from '../library/uploads';
 import { nextImage, markSeen } from '../library/rotation';
 import { play } from '../audio/sfx';
 import { animate } from './motion';
 import { DIFFICULTIES, DEFAULT_DIFFICULTY } from '../game/difficulty';
 
-// The setup screen: your library is one shuffle pool (personal images from
-// /my-library, or public placeholders when that's empty, plus anything you've
-// dragged in). Hand-pick a thumbnail or hit Shuffle for the next non-repeated
-// image, choose a difficulty, then start.
+// The setup screen: your library is one shuffle pool — the public starter set
+// until you add your own images (drag-drop / file-select, saved to this device).
+// Hand-pick a thumbnail or hit Shuffle for the next non-repeated image, choose a
+// difficulty, then start.
 
 export interface SetupResult {
   image: HTMLImageElement;
   /** Tiles along the image's shorter side — higher is harder. */
   baseTiles: number;
 }
+
+// Cap on how many images the user's library can hold. IndexedDB could store far
+// more (hundreds of MB → ~1000+ compressed 1080p images), so this is a UI/sanity
+// limit, not a storage one — it keeps the thumbnail grid and shuffle manageable.
+// At ~1 MB per WebP-encoded 16:9 image, 60 images is ~60 MB, well within quota.
+const MAX_LIBRARY_IMAGES = 60;
 
 export function renderSetup(
   root: HTMLElement,
@@ -24,7 +30,7 @@ export function renderSetup(
   let selectedImage: HTMLImageElement | null = null;
   let selectedId: string | null = null;
   let selectedDifficulty = DEFAULT_DIFFICULTY;
-  let library: LibraryImage[] = getLibrary();
+  let library: LibraryImage[] = [];
 
   root.innerHTML = '';
 
@@ -132,32 +138,33 @@ export function renderSetup(
   sourceNote.className = 'text-[11px] text-slate-500';
   card.appendChild(sourceNote);
 
+  const uploadCount = () => library.filter((i) => i.source === 'uploaded').length;
+
   const renderGrid = () => {
     grid.innerHTML = '';
     thumbButtons.clear();
     for (const image of library) {
       grid.appendChild(
         renderThumb(image, selectImage, thumbButtons, (id) => {
-          removeUpload(id);
-          refreshLibrary();
+          void removeUpload(id).then(refreshLibrary);
         }),
       );
     }
     refreshSelection();
 
-    const uploads = library.filter((i) => i.source === 'uploaded').length;
+    const uploads = uploadCount();
     shuffleHint.textContent = library.length
       ? `${library.length} in rotation`
       : 'No images yet — add some below';
     shuffleBtn.disabled = library.length === 0;
-    sourceNote.textContent = hasPersonalLibrary
-      ? `Your library (/my-library)${uploads ? ` + ${uploads} added here` : ''}`
-      : `Public placeholders${uploads ? ` + ${uploads} you added` : ''} — drop images in /my-library to make it yours`;
+    sourceNote.textContent = uploads
+      ? `Your library — ${uploads} / ${MAX_LIBRARY_IMAGES} images`
+      : 'Public starter set — add your own images to make it yours';
   };
 
   // Re-read the pool after uploads change, keeping the current selection valid.
-  const refreshLibrary = () => {
-    library = getLibrary();
+  const refreshLibrary = async () => {
+    library = await getLibrary();
     if (selectedId && !library.some((i) => i.id === selectedId)) {
       selectedId = null;
       selectedImage = null;
@@ -171,19 +178,33 @@ export function renderSetup(
 
   // --- Add images (drag-drop + file select) ---------------------------------
   const addZone = renderAddZone(async (files) => {
+    const room = MAX_LIBRARY_IMAGES - uploadCount();
+    if (room <= 0) {
+      showLimitDialog(container, uploadCount(), 0, files.length);
+      return;
+    }
+
+    const accepted = files.slice(0, room);
+    const rejected = files.length - accepted.length;
+
     let firstAdded: LibraryImage | null = null;
-    for (const file of files) {
+    let failed = 0;
+    for (const file of accepted) {
       try {
         const up = await addUpload(file);
         if (!firstAdded) {
-          firstAdded = { id: up.id, title: up.title, src: up.dataUrl, source: 'uploaded' };
+          firstAdded = { id: up.id, title: up.title, src: up.url, source: 'uploaded' };
         }
       } catch (err) {
+        failed++;
         console.warn('Skipped a file:', err);
       }
     }
-    refreshLibrary();
+    await refreshLibrary();
     if (firstAdded) selectImage(firstAdded);
+    if (rejected > 0) {
+      showLimitDialog(container, uploadCount(), accepted.length - failed, rejected);
+    }
   });
   card.appendChild(addZone);
 
@@ -245,7 +266,8 @@ export function renderSetup(
 
   root.appendChild(container);
 
-  renderGrid();
+  // Populate from IndexedDB (async); shows the public starter set until then.
+  void refreshLibrary();
 
   // Gentle entrance for the whole setup.
   animate(
@@ -380,4 +402,70 @@ function renderAddZone(
   });
 
   return zone;
+}
+
+// Popup card shown when an upload would exceed MAX_LIBRARY_IMAGES. `added` is
+// how many made it in this batch, `rejected` how many were turned away.
+function showLimitDialog(
+  host: HTMLElement,
+  total: number,
+  added: number,
+  rejected: number,
+): void {
+  play('select');
+
+  const overlay = document.createElement('div');
+  overlay.className =
+    'fixed inset-0 z-50 flex items-center justify-center p-6 bg-black/60 backdrop-blur-sm';
+
+  const cardEl = document.createElement('div');
+  cardEl.className =
+    'flex flex-col gap-4 p-6 rounded-3xl bg-base-800 ring-1 ring-base-700 w-full max-w-sm text-center shadow-2xl';
+
+  const iconWrap = document.createElement('div');
+  iconWrap.className =
+    'self-center grid place-items-center w-12 h-12 rounded-full bg-amber-500/15 text-amber-400';
+  iconWrap.appendChild(icon(icons.image, 'w-6 h-6'));
+  cardEl.appendChild(iconWrap);
+
+  const title = document.createElement('h2');
+  title.className = 'text-lg font-semibold';
+  title.textContent = 'Library is full';
+  cardEl.appendChild(title);
+
+  const msg = document.createElement('p');
+  msg.className = 'text-sm text-slate-400';
+  const rejectedText = `${rejected} image${rejected === 1 ? '' : 's'}`;
+  msg.textContent = added
+    ? `Added ${added}, but ${rejectedText} didn't fit. Your library holds up to ${MAX_LIBRARY_IMAGES} images (now at ${total}). Remove some to add more.`
+    : `Your library already holds the maximum of ${MAX_LIBRARY_IMAGES} images. Remove some to add ${rejectedText}.`;
+  cardEl.appendChild(msg);
+
+  const ok = document.createElement('button');
+  ok.className =
+    'self-center mt-1 px-6 py-2 rounded-full bg-accent hover:bg-accent-hover text-base-900 font-semibold transition-colors';
+  ok.textContent = 'Got it';
+  const close = () => {
+    const anim = animate(overlay, [{ opacity: 1 }, { opacity: 0 }], { duration: 160 });
+    if (anim) anim.finished.then(() => overlay.remove());
+    else overlay.remove();
+  };
+  ok.addEventListener('click', close);
+  overlay.addEventListener('click', (e) => {
+    if (e.target === overlay) close();
+  });
+  cardEl.appendChild(ok);
+
+  overlay.appendChild(cardEl);
+  host.appendChild(overlay);
+
+  animate(overlay, [{ opacity: 0 }, { opacity: 1 }], { duration: 160 });
+  animate(
+    cardEl,
+    [
+      { opacity: 0, transform: 'scale(0.95) translateY(8px)' },
+      { opacity: 1, transform: 'scale(1) translateY(0)' },
+    ],
+    { duration: 220, easing: 'cubic-bezier(0.22, 1, 0.36, 1)' },
+  );
 }
