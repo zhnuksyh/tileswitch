@@ -1,0 +1,5 @@
+# Personal puzzle library — everything here is ignored except this file and the
+# README, so your own pictures never get committed.
+*
+!.gitignore
+!README.md
