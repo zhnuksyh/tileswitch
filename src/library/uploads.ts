@@ -3,7 +3,7 @@
 // so a large personal library stays light. Each stored Blob is exposed to the
 // UI as an object URL, cached by id so repeated reads don't leak URLs.
 
-import { getAllUploads, putUpload, deleteUpload, type StoredUpload } from './db';
+import { getAllUploads, putUpload, deleteUpload, requestPersistence, type StoredUpload } from './db';
 import { encodeForStorage } from './encode';
 
 export interface UploadedImage {
@@ -64,6 +64,7 @@ export async function addUpload(file: File): Promise<UploadedImage> {
   if (!file.type.startsWith('image/')) {
     throw new Error('Not an image file.');
   }
+  requestPersistence();
   const encoded = await encodeForStorage(file);
   const entry: StoredUpload = {
     id: `uploaded:${Date.now()}-${Math.random().toString(36).slice(2, 8)}`,

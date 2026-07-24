@@ -42,6 +42,18 @@ function tx<T>(
   );
 }
 
+// Ask the browser to persist this origin's storage so the library (now stored
+// at full quality) is far less likely to be evicted under disk pressure. Safe
+// to call repeatedly; no-ops where unsupported. Fire-and-forget.
+let persistenceRequested = false;
+export function requestPersistence(): void {
+  if (persistenceRequested) return;
+  persistenceRequested = true;
+  navigator.storage?.persist?.().catch(() => {
+    /* best-effort */
+  });
+}
+
 export interface StoredUpload {
   id: string;
   title: string;
