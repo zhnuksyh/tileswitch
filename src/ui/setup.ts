@@ -71,7 +71,6 @@ export function renderSetup(
   header.className = 'flex flex-col items-center gap-2 text-center pt-6 lg:pt-0';
   const titleRow = document.createElement('div');
   titleRow.className = 'flex items-center gap-3';
-  titleRow.appendChild(icon(icons.puzzle, 'w-9 h-9 text-accent'));
   const h1 = document.createElement('h1');
   h1.className = 'text-4xl font-semibold tracking-tight';
   h1.textContent = 'TileSwitch';
@@ -299,7 +298,7 @@ export function renderSetup(
     }
     if (hasMore) {
       grid.appendChild(
-        renderViewMore(library.length - inline.length, () => showLibraryModal()),
+        renderViewMore(library.slice(inline.length), () => showLibraryModal()),
       );
     } else {
       grid.appendChild(renderAddTile(() => openUploadDialog()));
@@ -439,10 +438,13 @@ export function renderSetup(
     }
     if (hasMore) {
       historyGrid.appendChild(
-        renderViewMore(history.length - inline.length, () =>
-          showHistoryModal(container, history, {
-            onOpen: openHistoryDetail,
-          }),
+        renderViewMore(
+          history.slice(inline.length),
+          () =>
+            showHistoryModal(container, history, {
+              onOpen: openHistoryDetail,
+            }),
+          { tall: true },
         ),
       );
     }
@@ -535,8 +537,11 @@ function diffClass(active: boolean): string {
 }
 
 function thumbClass(selected: boolean): string {
+  // `transition-all` + a gentle hover lift/scale and shadow give every tile a
+  // soft, springy hover. `duration-200` keeps it snappy but smooth.
   const base =
-    'relative aspect-video rounded-xl overflow-hidden bg-base-900 ring-1 transition-all group';
+    'relative aspect-video rounded-xl overflow-hidden bg-base-900 ring-1 transition-all duration-200 ease-out group ' +
+    'hover:-translate-y-0.5 hover:scale-[1.03] hover:shadow-lg hover:shadow-black/40 hover:z-10';
   return selected
     ? `${base} ring-2 ring-accent`
     : `${base} ring-base-700 hover:ring-base-500`;
@@ -593,7 +598,8 @@ function renderThumb(
 function renderAddTile(onClick: () => void): HTMLButtonElement {
   const btn = document.createElement('button');
   btn.className =
-    'flex flex-col items-center justify-center gap-1 aspect-video rounded-xl bg-base-900 border-2 border-dashed border-base-600 hover:border-accent hover:bg-accent/5 text-slate-300 transition-colors';
+    'flex flex-col items-center justify-center gap-1 aspect-video rounded-xl bg-base-900 border-2 border-dashed border-base-600 hover:border-accent hover:bg-accent/5 text-slate-300 ' +
+    'transition-all duration-200 ease-out hover:-translate-y-0.5 hover:scale-[1.03]';
   btn.title = 'Add your own image';
   btn.appendChild(icon(icons.upload, 'w-6 h-6'));
   const label = document.createElement('span');
@@ -604,21 +610,52 @@ function renderAddTile(onClick: () => void): HTMLButtonElement {
   return btn;
 }
 
-// The "View more" tile — the 6th cell when the library holds more than six
-// images. `hidden` is how many images aren't shown inline.
-function renderViewMore(hidden: number, onClick: () => void): HTMLButtonElement {
+// The "View more" tile. Instead of a blank background it shows a soft collage
+// of the images that aren't on the front grid, with a "View more" label on top.
+// `tall` makes it match the taller history cards (which carry a metadata
+// footer) so a row of them lines up cleanly.
+function renderViewMore(
+  images: LibraryImage[],
+  onClick: () => void,
+  options: { tall?: boolean } = {},
+): HTMLButtonElement {
   const btn = document.createElement('button');
   btn.className =
-    'flex flex-col items-center justify-center gap-1 aspect-video rounded-xl bg-base-900 ring-1 ring-base-700 hover:ring-base-500 text-slate-300 transition-all';
-  btn.appendChild(icon(icons.image, 'w-6 h-6'));
+    'group relative flex items-center justify-center overflow-hidden rounded-xl bg-base-900 ring-1 ring-base-700 hover:ring-base-500 text-slate-100 ' +
+    'transition-all duration-200 ease-out hover:-translate-y-0.5 hover:scale-[1.03] hover:shadow-lg hover:shadow-black/40 hover:z-10 ' +
+    (options.tall ? 'h-full min-h-[7rem]' : 'aspect-video');
+
+  // Collage: up to four not-shown images tiled behind a dark scrim. Falls back
+  // to a plain panel with an icon when there's nothing to show.
+  const sample = images.slice(0, 4);
+  if (sample.length) {
+    const collage = document.createElement('div');
+    collage.className =
+      'absolute inset-0 grid ' + (sample.length >= 3 ? 'grid-cols-2 grid-rows-2' : 'grid-cols-2');
+    for (const image of sample) {
+      const cell = document.createElement('img');
+      cell.className =
+        'w-full h-full object-cover opacity-70 group-hover:opacity-90 transition-opacity';
+      cell.loading = 'lazy';
+      cell.src = image.src;
+      cell.alt = '';
+      collage.appendChild(cell);
+    }
+    btn.appendChild(collage);
+    const scrim = document.createElement('div');
+    scrim.className = 'absolute inset-0 bg-base-900/55 group-hover:bg-base-900/45 transition-colors';
+    btn.appendChild(scrim);
+  } else {
+    btn.appendChild(icon(icons.image, 'w-6 h-6 text-slate-300'));
+  }
+
   const label = document.createElement('span');
-  label.className = 'text-xs font-semibold';
-  label.textContent = 'View more';
+  label.className =
+    'relative flex items-center gap-1.5 px-3 py-1 rounded-full bg-base-900/70 backdrop-blur-sm text-xs font-semibold ring-1 ring-white/10';
+  label.appendChild(icon(icons.image, 'w-3.5 h-3.5'));
+  label.appendChild(document.createTextNode('View more'));
   btn.appendChild(label);
-  const count = document.createElement('span');
-  count.className = 'text-[11px] text-slate-500 tabular-nums';
-  count.textContent = `+${hidden}`;
-  btn.appendChild(count);
+
   btn.addEventListener('click', onClick);
   return btn;
 }
@@ -648,7 +685,7 @@ function showAllImages(
 
   const cardEl = document.createElement('div');
   cardEl.className =
-    'flex flex-col gap-4 p-5 sm:p-6 rounded-3xl bg-base-800 ring-1 ring-base-700 w-full max-w-3xl max-h-[85vh] shadow-2xl';
+    'flex flex-col gap-4 p-5 sm:p-6 rounded-3xl bg-base-800 ring-1 ring-base-700 w-full max-w-4xl max-h-[85vh] shadow-2xl';
 
   const head = document.createElement('div');
   head.className = 'flex items-center justify-between gap-3';
@@ -676,7 +713,7 @@ function showAllImages(
   const scroll = document.createElement('div');
   scroll.className = 'overflow-y-auto -mx-1 px-1 no-scrollbar';
   const modalGrid = document.createElement('div');
-  modalGrid.className = 'grid grid-cols-3 sm:grid-cols-4 gap-3';
+  modalGrid.className = 'grid grid-cols-3 sm:grid-cols-5 gap-3';
 
   const close = () => {
     const anim = animate(overlay, [{ opacity: 1 }, { opacity: 0 }], { duration: 160 });
@@ -687,6 +724,9 @@ function showAllImages(
   // Working copy of the order; committed via onReorder on each drop.
   let order = library.map((i) => i.id);
   const byId = new Map(library.map((i) => [i.id, i]));
+  // Live tile nodes, keyed by id, so reordering is a DOM move (identity kept) —
+  // this lets us FLIP-animate tiles from old to new positions smoothly.
+  const tiles = new Map<string, HTMLButtonElement>();
 
   // Commit the current order of uploaded ids (placeholders are excluded).
   const commitOrder = () => {
@@ -696,8 +736,56 @@ function showAllImages(
 
   let dragId: string | null = null;
 
-  const rebuild = () => {
+  // FLIP: given a set of tiles, capture their current rects, run `mutate` to
+  // rearrange them in the DOM, then animate each from its old rect to its new
+  // one. Produces a smooth glide instead of an instant jump.
+  const flip = (mutate: () => void) => {
+    const nodes = [...tiles.values()];
+    const before = new Map(nodes.map((n) => [n, n.getBoundingClientRect()]));
+    mutate();
+    for (const n of nodes) {
+      const first = before.get(n);
+      if (!first) continue;
+      const last = n.getBoundingClientRect();
+      const dx = first.left - last.left;
+      const dy = first.top - last.top;
+      if (dx === 0 && dy === 0) continue;
+      animate(
+        n,
+        [
+          { transform: `translate(${dx}px, ${dy}px)` },
+          { transform: 'translate(0, 0)' },
+        ],
+        { duration: 260, easing: 'cubic-bezier(0.22, 1, 0.36, 1)' },
+      );
+    }
+  };
+
+  // Re-append tiles (and the Add tile) to match `order`, without a FLIP.
+  const layout = () => {
+    for (const id of order) {
+      const node = tiles.get(id);
+      if (node) modalGrid.appendChild(node);
+    }
+    modalGrid.appendChild(addTile);
+  };
+
+  // Move `from` to sit before `to` in the order, animating the shuffle.
+  const moveBefore = (from: string, to: string) => {
+    if (from === to) return;
+    if (byId.get(from)?.source !== 'uploaded') return;
+    order = order.filter((x) => x !== from);
+    const targetIndex = order.indexOf(to);
+    order.splice(targetIndex < 0 ? order.length : targetIndex, 0, from);
+    flip(layout);
+    commitOrder();
+  };
+
+  const addTile = renderAddTile(opts.onAdd);
+
+  const build = () => {
     modalGrid.innerHTML = '';
+    tiles.clear();
     for (const id of order) {
       const image = byId.get(id);
       if (!image) continue;
@@ -709,10 +797,25 @@ function showAllImages(
         },
         new Map(),
         (rid) => {
+          const node = tiles.get(rid);
           opts.onRemove(rid);
           order = order.filter((x) => x !== rid);
           byId.delete(rid);
-          rebuild();
+          tiles.delete(rid);
+          // Collapse the removed tile away, then reflow the rest smoothly.
+          if (node) {
+            const anim = animate(
+              node,
+              [{ opacity: 1, transform: 'scale(1)' }, { opacity: 0, transform: 'scale(0.85)' }],
+              { duration: 160, easing: 'ease-in' },
+            );
+            const finish = () => {
+              node.remove();
+              flip(() => {});
+            };
+            if (anim) anim.finished.then(finish);
+            else finish();
+          }
         },
       );
       if (image.id === selectedId) btn.className = thumbClass(true);
@@ -720,41 +823,39 @@ function showAllImages(
       // Drag-to-reorder (uploaded images only).
       if (image.source === 'uploaded') {
         btn.draggable = true;
-        btn.classList.add('cursor-grab');
+        btn.classList.add('cursor-grab', 'transition-shadow');
         btn.addEventListener('dragstart', (e) => {
           dragId = id;
-          btn.classList.add('opacity-40');
-          e.dataTransfer?.setData('text/plain', id);
-          if (e.dataTransfer) e.dataTransfer.effectAllowed = 'move';
+          // Lift the dragged tile: slightly shrunk + translucent, above others.
+          btn.classList.add('opacity-60', 'scale-95', 'z-10', 'ring-2', 'ring-accent');
+          if (e.dataTransfer) {
+            e.dataTransfer.setData('text/plain', id);
+            e.dataTransfer.effectAllowed = 'move';
+          }
         });
         btn.addEventListener('dragend', () => {
           dragId = null;
-          btn.classList.remove('opacity-40');
+          btn.classList.remove('opacity-60', 'scale-95', 'z-10', 'ring-2', 'ring-accent');
         });
         btn.addEventListener('dragover', (e) => {
           e.preventDefault();
           if (e.dataTransfer) e.dataTransfer.dropEffect = 'move';
-        });
-        btn.addEventListener('drop', (e) => {
-          e.preventDefault();
+          // Live preview: as you hover a target, shuffle the dragged tile into
+          // place so the reorder animates continuously, not just on drop.
           const from = dragId;
-          if (!from || from === id) return;
-          // Only reorder among uploaded images.
-          if (byId.get(from)?.source !== 'uploaded') return;
-          order = order.filter((x) => x !== from);
-          const targetIndex = order.indexOf(id);
-          order.splice(targetIndex, 0, from);
-          commitOrder();
-          rebuild();
+          if (from && from !== id && byId.get(from)?.source === 'uploaded') {
+            moveBefore(from, id);
+          }
         });
       }
 
+      tiles.set(id, btn);
       modalGrid.appendChild(btn);
     }
     // Add-image tile always last.
-    modalGrid.appendChild(renderAddTile(opts.onAdd));
+    modalGrid.appendChild(addTile);
   };
-  rebuild();
+  build();
 
   scroll.appendChild(modalGrid);
   cardEl.appendChild(scroll);
@@ -799,7 +900,8 @@ function renderHistoryThumb(
 ): HTMLButtonElement {
   const btn = document.createElement('button');
   btn.className =
-    'flex flex-col rounded-xl overflow-hidden bg-base-900 ring-1 ring-base-700 hover:ring-base-500 transition-all text-left';
+    'flex flex-col rounded-xl overflow-hidden bg-base-900 ring-1 ring-base-700 hover:ring-base-500 ' +
+    'transition-all duration-200 ease-out hover:-translate-y-0.5 hover:scale-[1.03] hover:shadow-lg hover:shadow-black/40 hover:z-10 text-left';
   btn.title = image.title;
 
   const frame = document.createElement('div');
@@ -875,7 +977,7 @@ function showHistoryModal(
 
   const cardEl = document.createElement('div');
   cardEl.className =
-    'flex flex-col gap-4 p-5 rounded-3xl bg-base-800 ring-1 ring-base-700 w-full max-w-lg max-h-[85vh] shadow-2xl';
+    'flex flex-col gap-4 p-5 rounded-3xl bg-base-800 ring-1 ring-base-700 w-full max-w-4xl max-h-[85vh] shadow-2xl';
 
   const head = document.createElement('div');
   head.className = 'flex items-center justify-between gap-3';
@@ -894,7 +996,7 @@ function showHistoryModal(
   const scroll = document.createElement('div');
   scroll.className = 'overflow-y-auto -mr-2 pr-2';
   const grid = document.createElement('div');
-  grid.className = 'grid grid-cols-3 gap-3';
+  grid.className = 'grid grid-cols-3 sm:grid-cols-5 gap-3';
   for (const image of history) {
     grid.appendChild(
       renderHistoryThumb(image, () => {
