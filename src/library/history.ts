@@ -97,6 +97,13 @@ export function recordSolved(
   save(entries);
 }
 
+/** Remove the history entry for `id` (e.g. the user deletes a card). */
+export function removeFromHistory(id: string): void {
+  const entries = load();
+  const next = entries.filter((e) => e.id !== id);
+  if (next.length !== entries.length) save(next);
+}
+
 /**
  * Recently-played images, most-recent first, resolved against the current
  * library so each has a live `src`. Solve metadata (time, date, difficulty)

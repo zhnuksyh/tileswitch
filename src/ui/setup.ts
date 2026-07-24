@@ -3,7 +3,12 @@ import { getLibrary, type LibraryImage } from '../library/manifest';
 import { addUploads, removeUpload, reorderUploads } from '../library/uploads';
 import { nextImage, markSeen } from '../library/rotation';
 import { setBackground, clearBackground, hasBackground } from '../library/background';
-import { recordPlayed, getHistory, type HistoryItem } from '../library/history';
+import {
+  recordPlayed,
+  getHistory,
+  removeFromHistory,
+  type HistoryItem,
+} from '../library/history';
 import { getNote, setNote, hasNote, NOTE_MAX_LEN } from '../library/notes';
 import {
   buildShareCard,
@@ -434,7 +439,16 @@ export function renderSetup(
     const hasMore = history.length > 3;
     const inline = hasMore ? history.slice(0, 2) : history.slice(0, 3);
     for (const image of inline) {
-      historyGrid.appendChild(renderHistoryThumb(image, () => openHistoryDetail(image)));
+      historyGrid.appendChild(
+        renderHistoryThumb(
+          image,
+          () => openHistoryDetail(image),
+          () => {
+            removeFromHistory(image.id);
+            renderHistory();
+          },
+        ),
+      );
     }
     if (hasMore) {
       historyGrid.appendChild(
@@ -443,6 +457,7 @@ export function renderSetup(
           () =>
             showHistoryModal(container, history, {
               onOpen: openHistoryDetail,
+              onDelete: renderHistory,
             }),
           { tall: true },
         ),
@@ -897,10 +912,11 @@ function fmtDate(ms: number): string {
 function renderHistoryThumb(
   image: HistoryItem,
   onOpen: () => void,
+  onDelete?: () => void,
 ): HTMLButtonElement {
   const btn = document.createElement('button');
   btn.className =
-    'flex flex-col rounded-xl overflow-hidden bg-base-900 ring-1 ring-base-700 hover:ring-base-500 ' +
+    'group flex flex-col rounded-xl overflow-hidden bg-base-900 ring-1 ring-base-700 hover:ring-base-500 ' +
     'transition-all duration-200 ease-out hover:-translate-y-0.5 hover:scale-[1.03] hover:shadow-lg hover:shadow-black/40 hover:z-10 text-left';
   btn.title = image.title;
 
@@ -926,6 +942,23 @@ function renderHistoryThumb(
     dot.title = 'Has a note';
     dot.appendChild(icon(icons.note, 'w-3 h-3'));
     frame.appendChild(dot);
+  }
+
+  // Delete: removes this image from history. Reveals on hover, like the
+  // library thumbnails' remove control.
+  if (onDelete) {
+    const del = document.createElement('span');
+    del.className =
+      'absolute top-1 left-1 grid place-items-center w-6 h-6 rounded-full bg-black/60 text-white opacity-0 group-hover:opacity-100 hover:bg-red-500 transition-opacity';
+    del.setAttribute('role', 'button');
+    del.title = 'Remove from history';
+    del.appendChild(icon(icons.trash, 'w-3.5 h-3.5'));
+    del.addEventListener('click', (e) => {
+      e.stopPropagation();
+      play('select');
+      onDelete();
+    });
+    frame.appendChild(del);
   }
   btn.appendChild(frame);
 
@@ -966,8 +999,12 @@ function renderHistoryThumb(
 // Clicking one opens its detail panel.
 function showHistoryModal(
   host: HTMLElement,
-  history: LibraryImage[],
-  opts: { onOpen: (image: LibraryImage) => void },
+  history: HistoryItem[],
+  opts: {
+    onOpen: (image: LibraryImage) => void;
+    /** Called after a card is deleted so the home grid can refresh. */
+    onDelete: (id: string) => void;
+  },
 ): void {
   play('select');
 
@@ -997,16 +1034,34 @@ function showHistoryModal(
   scroll.className = 'overflow-y-auto -mr-2 pr-2';
   const grid = document.createElement('div');
   grid.className = 'grid grid-cols-3 sm:grid-cols-5 gap-3';
-  for (const image of history) {
-    grid.appendChild(
-      renderHistoryThumb(image, () => {
-        close();
-        opts.onOpen(image);
-      }),
-    );
-  }
   scroll.appendChild(grid);
   cardEl.appendChild(scroll);
+
+  // Working copy so deletes can drop cards without re-querying storage.
+  const items = [...history];
+  const rebuild = () => {
+    grid.innerHTML = '';
+    for (const image of items) {
+      grid.appendChild(
+        renderHistoryThumb(
+          image,
+          () => {
+            close();
+            opts.onOpen(image);
+          },
+          () => {
+            removeFromHistory(image.id);
+            opts.onDelete(image.id);
+            const idx = items.findIndex((i) => i.id === image.id);
+            if (idx >= 0) items.splice(idx, 1);
+            if (items.length === 0) close();
+            else rebuild();
+          },
+        ),
+      );
+    }
+  };
+  rebuild();
 
   const close = () => {
     const anim = animate(overlay, [{ opacity: 1 }, { opacity: 0 }], { duration: 150 });
