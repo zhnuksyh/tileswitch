@@ -7,6 +7,7 @@ import { burstConfetti } from './confetti';
 import { loadSettings } from '../game/settings';
 import { computeScore, recordSolve, breakStreak, loadStats } from '../game/stats';
 import { getNote, setNote, NOTE_MAX_LEN } from '../library/notes';
+import { recordSolved } from '../library/history';
 import type { LibraryImage } from '../library/manifest';
 
 // Hosts a running puzzle: header with progress + controls, the board itself,
@@ -17,6 +18,8 @@ export interface GameContext {
   entry: LibraryImage;
   /** The library pool to rotate through on 'Next puzzle'. */
   library: LibraryImage[];
+  /** Difficulty label, recorded in history on solve. */
+  difficultyLabel: string;
 }
 
 export interface GameCallbacks {
@@ -158,7 +161,7 @@ export function renderGame(
   // groups on the right. No divider under it. Width matches the board so the
   // controls sit at its edges.
   const header = document.createElement('header');
-  header.className = 'flex items-center justify-between gap-4 px-2 py-4 w-full';
+  header.className = 'flex items-center justify-between gap-4 px-1 w-full';
   header.style.maxWidth = `${headerMax}px`;
 
   const backBtn = document.createElement('button');
@@ -264,17 +267,17 @@ export function renderGame(
 
   header.appendChild(rightControls);
 
-  container.appendChild(header);
+  // Stage: header + board grouped and centred together, so the controls sit
+  // just above the puzzle rather than pinned to the top of the screen. Scrolls
+  // as one unit when a fine grid is taller than the viewport.
+  const stage = document.createElement('div');
+  stage.className =
+    'flex-1 w-full flex flex-col items-center justify-center gap-1.5 overflow-auto p-4';
+  stage.appendChild(header);
 
-  // Board area. Scrolls when a fine grid is larger than the viewport; the
-  // inner wrapper uses margin:auto so the board stays centred when it fits but
-  // pins to the top-left (not clipped) when it overflows.
-  const boardArea = document.createElement('div');
-  boardArea.className = 'flex-1 flex overflow-auto w-full';
   const boardCenter = document.createElement('div');
-  boardCenter.className = 'm-auto p-4';
-  boardArea.appendChild(boardCenter);
-  container.appendChild(boardArea);
+  stage.appendChild(boardCenter);
+  container.appendChild(stage);
 
   root.appendChild(container);
 
@@ -312,6 +315,8 @@ export function renderGame(
         { score, timeMs: elapsedMs, tiles: total, moves },
         settings.streak,
       );
+      // Stamp this image's history entry with the solve time + difficulty.
+      recordSolved(ctx.entry.id, elapsedMs, ctx.difficultyLabel);
       showWin(root, board, cb, {
         settings,
         timeMs: elapsedMs,
