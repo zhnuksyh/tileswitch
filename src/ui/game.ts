@@ -4,6 +4,8 @@ import { icon, icons } from './icons';
 import { isMuted, toggleMuted } from '../audio/sfx';
 import { animate } from './motion';
 import { burstConfetti } from './confetti';
+import { loadSettings } from '../game/settings';
+import { computeScore, recordSolve, breakStreak, loadStats } from '../game/stats';
 
 // Hosts a running puzzle: header with progress + controls, the board itself,
 // and a win overlay. Chooses a cell size that fits the viewport.
@@ -13,6 +15,14 @@ export interface GameCallbacks {
   onRestart: () => void;
 }
 
+/** mm:ss from milliseconds. */
+function formatTime(ms: number): string {
+  const total = Math.floor(ms / 1000);
+  const m = Math.floor(total / 60);
+  const s = total % 60;
+  return `${m}:${s.toString().padStart(2, '0')}`;
+}
+
 export function renderGame(
   root: HTMLElement,
   image: HTMLImageElement,
@@ -20,6 +30,16 @@ export function renderGame(
   cb: GameCallbacks,
 ): void {
   root.innerHTML = '';
+
+  const settings = loadSettings();
+
+  // Solve tracking. The clock starts when play begins (after the reveal +
+  // shuffle) and stops on win.
+  let startTime = 0;
+  let elapsedMs = 0;
+  let moves = 0;
+  let timerId: number | null = null;
+  let finished = false;
 
   const grid = computeGrid(image.naturalWidth, image.naturalHeight, baseTiles);
 
@@ -56,9 +76,40 @@ export function renderGame(
   });
   header.appendChild(backBtn);
 
+  // Center cluster: progress, plus optional timer and streak chips.
+  const centerCluster = document.createElement('div');
+  centerCluster.className = 'flex items-center gap-3 text-sm font-medium tabular-nums';
+
   const progress = document.createElement('div');
-  progress.className = 'text-sm font-medium text-slate-300 tabular-nums';
-  header.appendChild(progress);
+  progress.className = 'text-slate-300';
+  centerCluster.appendChild(progress);
+
+  // Live timer chip (only when enabled).
+  const timerChip = document.createElement('div');
+  timerChip.className =
+    'flex items-center gap-1.5 px-2.5 py-1 rounded-full bg-base-800 text-slate-200';
+  timerChip.appendChild(icon(icons.timer, 'w-3.5 h-3.5 text-slate-400'));
+  const timerText = document.createElement('span');
+  timerText.textContent = '0:00';
+  timerChip.appendChild(timerText);
+  if (settings.timer) centerCluster.appendChild(timerChip);
+
+  // Streak chip (only when enabled and there's a live streak to show).
+  const streakChip = document.createElement('div');
+  streakChip.className =
+    'flex items-center gap-1.5 px-2.5 py-1 rounded-full bg-amber-500/15 text-amber-300';
+  streakChip.appendChild(icon(icons.streak, 'w-3.5 h-3.5'));
+  const streakText = document.createElement('span');
+  streakChip.appendChild(streakText);
+  const refreshStreakChip = () => {
+    const cur = loadStats().currentStreak;
+    streakText.textContent = `${cur}`;
+    streakChip.classList.toggle('hidden', !(settings.streak && cur > 0));
+  };
+  refreshStreakChip();
+  if (settings.streak) centerCluster.appendChild(streakChip);
+
+  header.appendChild(centerCluster);
 
   const rightControls = document.createElement('div');
   rightControls.className = 'flex items-center gap-2';
@@ -131,15 +182,80 @@ export function renderGame(
 
   root.appendChild(container);
 
+  const stopTimer = () => {
+    if (timerId !== null) {
+      window.clearInterval(timerId);
+      timerId = null;
+    }
+  };
+
   const board = new Board(boardCenter, image, grid, safeCell, {
     onProgress: (correct, total) => {
       progress.textContent = `${correct} / ${total} in place`;
     },
-    onWin: () => showWin(root, board, cb),
+    onMove: (m) => {
+      moves = m;
+    },
+    onReady: () => {
+      // Play has begun — start the clock.
+      startTime = performance.now();
+      if (settings.timer) {
+        timerId = window.setInterval(() => {
+          elapsedMs = performance.now() - startTime;
+          timerText.textContent = formatTime(elapsedMs);
+        }, 250);
+      }
+    },
+    onWin: () => {
+      finished = true;
+      stopTimer();
+      elapsedMs = startTime ? performance.now() - startTime : 0;
+      const total = board.total;
+      const score = computeScore(total, elapsedMs, moves);
+      const { stats, newBestScore, newBestTime } = recordSolve(
+        { score, timeMs: elapsedMs, tiles: total, moves },
+        settings.streak,
+      );
+      showWin(root, board, cb, {
+        settings,
+        timeMs: elapsedMs,
+        moves,
+        score,
+        stats,
+        newBestScore,
+        newBestTime,
+      });
+    },
   });
+
+  // Exiting or restarting a puzzle mid-solve breaks the streak.
+  const abandonIfUnfinished = () => {
+    stopTimer();
+    if (!finished && settings.streak) breakStreak();
+  };
+  backBtn.addEventListener('click', abandonIfUnfinished);
+  restartBtn.addEventListener('click', abandonIfUnfinished);
+
+  // Reveal the finished picture, then shuffle into play.
+  board.start(1200);
 }
 
-function showWin(root: HTMLElement, board: Board, cb: GameCallbacks): void {
+interface WinInfo {
+  settings: ReturnType<typeof loadSettings>;
+  timeMs: number;
+  moves: number;
+  score: number;
+  stats: ReturnType<typeof loadStats>;
+  newBestScore: boolean;
+  newBestTime: boolean;
+}
+
+function showWin(
+  root: HTMLElement,
+  board: Board,
+  cb: GameCallbacks,
+  info: WinInfo,
+): void {
   const overlay = document.createElement('div');
   overlay.className =
     'fixed inset-0 z-[70] flex items-center justify-center bg-base-900/80 backdrop-blur-sm transition-all duration-300';
@@ -157,6 +273,57 @@ function showWin(root: HTMLElement, board: Board, cb: GameCallbacks): void {
   p.className = 'text-slate-400 text-sm';
   p.textContent = 'Nicely done. Play again?';
   modal.appendChild(p);
+
+  // Stats summary: shown per enabled setting.
+  const { settings } = info;
+  if (settings.timer || settings.score || settings.streak) {
+    const statRow = document.createElement('div');
+    statRow.className = 'flex flex-wrap items-stretch justify-center gap-3 mt-1';
+
+    const stat = (
+      iconNode: Parameters<typeof icon>[0],
+      label: string,
+      value: string,
+      highlight = false,
+    ) => {
+      const cell = document.createElement('div');
+      cell.className =
+        'flex flex-col items-center gap-1 px-4 py-3 rounded-2xl bg-base-900/60 ring-1 ' +
+        (highlight ? 'ring-amber-400/60' : 'ring-base-700') +
+        ' min-w-[84px]';
+      const top = document.createElement('div');
+      top.className = 'flex items-center gap-1.5 text-slate-400 text-xs';
+      top.appendChild(icon(iconNode, 'w-3.5 h-3.5'));
+      top.appendChild(document.createTextNode(label));
+      cell.appendChild(top);
+      const val = document.createElement('span');
+      val.className = 'text-lg font-semibold tabular-nums';
+      val.textContent = value;
+      cell.appendChild(val);
+      if (highlight) {
+        const pb = document.createElement('span');
+        pb.className = 'text-[10px] font-semibold text-amber-400 -mt-1';
+        pb.textContent = 'Best!';
+        cell.appendChild(pb);
+      }
+      return cell;
+    };
+
+    if (settings.timer) {
+      statRow.appendChild(stat(icons.timer, 'Time', formatTime(info.timeMs), info.newBestTime));
+    }
+    if (settings.score) {
+      statRow.appendChild(
+        stat(icons.score, 'Score', `${info.score}`, info.newBestScore),
+      );
+    }
+    if (settings.streak) {
+      statRow.appendChild(
+        stat(icons.streak, 'Streak', `${info.stats.currentStreak}`),
+      );
+    }
+    modal.appendChild(statRow);
+  }
 
   // Confetti fires on show; kept so we can stop it if we leave early.
   const stopConfetti = burstConfetti();

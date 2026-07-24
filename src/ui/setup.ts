@@ -5,6 +5,8 @@ import { nextImage, markSeen } from '../library/rotation';
 import { play } from '../audio/sfx';
 import { animate } from './motion';
 import { DIFFICULTIES, DEFAULT_DIFFICULTY } from '../game/difficulty';
+import { loadSettings, saveSettings, type Settings } from '../game/settings';
+import { loadStats } from '../game/stats';
 
 // The setup screen: your library is one shuffle pool — the public starter set
 // until you add your own images (drag-drop / file-select, saved to this device).
@@ -37,6 +39,16 @@ export function renderSetup(
   const container = document.createElement('div');
   container.className =
     'min-h-screen w-full flex flex-col items-center justify-center gap-6 p-6';
+
+  // Settings gear, pinned top-right — opens the gameplay toggles panel.
+  const gearBtn = document.createElement('button');
+  gearBtn.className =
+    'fixed top-4 right-4 z-40 flex items-center justify-center w-11 h-11 rounded-full bg-base-800 hover:bg-base-700 ring-1 ring-base-700 transition-colors';
+  gearBtn.setAttribute('aria-label', 'Settings');
+  gearBtn.title = 'Settings';
+  gearBtn.appendChild(icon(icons.settings, 'w-5 h-5'));
+  gearBtn.addEventListener('click', () => showSettings(container));
+  container.appendChild(gearBtn);
 
   // Title
   const header = document.createElement('div');
@@ -520,4 +532,140 @@ function showLoading(
       else overlay.remove();
     },
   };
+}
+
+// Settings panel: toggle timer / score / streak, plus a read-out of best stats.
+function showSettings(host: HTMLElement): void {
+  play('select');
+  const settings = loadSettings();
+
+  const overlay = document.createElement('div');
+  overlay.className =
+    'fixed inset-0 z-50 flex items-center justify-center p-6 bg-black/60 backdrop-blur-sm';
+
+  const cardEl = document.createElement('div');
+  cardEl.className =
+    'flex flex-col gap-5 p-6 rounded-3xl bg-base-800 ring-1 ring-base-700 w-full max-w-sm shadow-2xl';
+
+  const heading = document.createElement('div');
+  heading.className = 'flex items-center gap-2';
+  heading.appendChild(icon(icons.settings, 'w-5 h-5 text-accent'));
+  const title = document.createElement('h2');
+  title.className = 'text-lg font-semibold';
+  title.textContent = 'Settings';
+  heading.appendChild(title);
+  cardEl.appendChild(heading);
+
+  const note = document.createElement('p');
+  note.className = 'text-xs text-slate-500 -mt-3';
+  note.textContent = 'Applies to your next puzzle.';
+  cardEl.appendChild(note);
+
+  const rows = document.createElement('div');
+  rows.className = 'flex flex-col gap-2';
+  cardEl.appendChild(rows);
+
+  const toggleRow = (
+    iconNode: Parameters<typeof icon>[0],
+    label: string,
+    desc: string,
+    key: keyof Settings,
+  ) => {
+    const row = document.createElement('button');
+    row.className =
+      'flex items-center gap-3 p-3 rounded-2xl bg-base-900/50 ring-1 ring-base-700 hover:ring-base-500 transition-colors text-left';
+
+    const ic = icon(iconNode, 'w-5 h-5 text-slate-300 shrink-0');
+    row.appendChild(ic);
+
+    const text = document.createElement('div');
+    text.className = 'flex flex-col flex-1 min-w-0';
+    const name = document.createElement('span');
+    name.className = 'text-sm font-medium';
+    name.textContent = label;
+    const d = document.createElement('span');
+    d.className = 'text-[11px] text-slate-500';
+    d.textContent = desc;
+    text.appendChild(name);
+    text.appendChild(d);
+    row.appendChild(text);
+
+    // Switch.
+    const sw = document.createElement('span');
+    const knob = document.createElement('span');
+    knob.className =
+      'absolute top-0.5 w-5 h-5 rounded-full bg-white transition-all duration-200';
+    const paint = () => {
+      const on = settings[key];
+      sw.className =
+        'relative shrink-0 w-11 h-6 rounded-full transition-colors duration-200 ' +
+        (on ? 'bg-accent' : 'bg-base-600');
+      knob.style.left = on ? '22px' : '2px';
+    };
+    sw.appendChild(knob);
+    paint();
+    row.appendChild(sw);
+
+    row.addEventListener('click', () => {
+      settings[key] = !settings[key];
+      saveSettings(settings);
+      paint();
+      play('select');
+    });
+    rows.appendChild(row);
+  };
+
+  toggleRow(icons.timer, 'Timer', 'Show a running clock while you play.', 'timer');
+  toggleRow(icons.score, 'Score', 'Rate each solve by speed and moves.', 'score');
+  toggleRow(icons.streak, 'Streak', 'Count consecutive solves.', 'streak');
+
+  // Best-stats read-out.
+  const stats = loadStats();
+  if (stats.bestScore > 0 || stats.longestStreak > 0) {
+    const best = document.createElement('div');
+    best.className =
+      'flex items-center justify-around gap-2 pt-1 text-center text-xs text-slate-400';
+    const cell = (label: string, value: string) => {
+      const c = document.createElement('div');
+      c.className = 'flex flex-col';
+      const v = document.createElement('span');
+      v.className = 'text-base font-semibold text-slate-200 tabular-nums';
+      v.textContent = value;
+      const l = document.createElement('span');
+      l.textContent = label;
+      c.appendChild(v);
+      c.appendChild(l);
+      return c;
+    };
+    best.appendChild(cell('Best score', `${stats.bestScore}`));
+    best.appendChild(cell('Longest streak', `${stats.longestStreak}`));
+    cardEl.appendChild(best);
+  }
+
+  const done = document.createElement('button');
+  done.className =
+    'self-stretch mt-1 px-6 py-2.5 rounded-full bg-accent hover:bg-accent-hover text-base-900 font-semibold transition-colors';
+  done.textContent = 'Done';
+  const close = () => {
+    const anim = animate(overlay, [{ opacity: 1 }, { opacity: 0 }], { duration: 160 });
+    if (anim) anim.finished.then(() => overlay.remove());
+    else overlay.remove();
+  };
+  done.addEventListener('click', close);
+  overlay.addEventListener('click', (e) => {
+    if (e.target === overlay) close();
+  });
+  cardEl.appendChild(done);
+
+  overlay.appendChild(cardEl);
+  host.appendChild(overlay);
+  animate(overlay, [{ opacity: 0 }, { opacity: 1 }], { duration: 160 });
+  animate(
+    cardEl,
+    [
+      { opacity: 0, transform: 'scale(0.96) translateY(8px)' },
+      { opacity: 1, transform: 'scale(1) translateY(0)' },
+    ],
+    { duration: 220, easing: 'cubic-bezier(0.22, 1, 0.36, 1)' },
+  );
 }

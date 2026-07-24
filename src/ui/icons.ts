@@ -11,6 +11,10 @@ import {
   Eye,
   Shuffle,
   Trash2,
+  Timer,
+  Flame,
+  Star,
+  SlidersHorizontal,
   type IconNode,
 } from 'lucide';
 
@@ -36,4 +40,8 @@ export const icons = {
   peek: Eye,
   shuffle: Shuffle,
   trash: Trash2,
+  timer: Timer,
+  streak: Flame,
+  score: Star,
+  settings: SlidersHorizontal,
 };
