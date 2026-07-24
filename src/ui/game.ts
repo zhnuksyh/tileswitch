@@ -552,6 +552,9 @@ function showWin(
   menu.appendChild(document.createTextNode('Menu'));
   menu.addEventListener('click', () => {
     stopConfetti();
+    // Returning to the menu after a solve *stops* the run: the streak only
+    // survives while you keep advancing with "Next puzzle".
+    if (info.settings.streak) breakStreak();
     overlay.remove();
     backPill.remove();
     board.destroy();
