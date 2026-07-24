@@ -13,6 +13,23 @@ let ctx: AudioContext | null = null;
 let master: GainNode | null = null;
 let muted = readMuted();
 
+// Opt-in SFX loudness multiplier. Defaults to 1 (no change for the app); the
+// trailer bumps it so the synthesized blips sit above its music bed. Purely
+// additive — nothing in the app ever calls setSfxBoost().
+let sfxBoost = 1;
+
+/** Multiply all SFX gains by `mult` (>=0). Only the trailer uses this. */
+export function setSfxBoost(mult: number): void {
+  sfxBoost = Math.max(0, mult);
+}
+
+/** Expose the shared AudioContext (created lazily) so the trailer can route a
+ * music bed through the same output that screen-capture records. Returns null
+ * before the first gesture unlocks audio. */
+export function getAudioContext(): AudioContext | null {
+  return ensureContext();
+}
+
 function readMuted(): boolean {
   try {
     return localStorage.getItem(STORAGE_KEY) === '1';
@@ -89,7 +106,7 @@ function playTones(tones: Tone[]): void {
     osc.type = t.type ?? 'sine';
     osc.frequency.setValueAtTime(t.freq, start);
 
-    const peak = t.gain ?? 0.3;
+    const peak = (t.gain ?? 0.3) * sfxBoost;
     // Fast attack, smooth exponential decay for a soft blip.
     gain.gain.setValueAtTime(0.0001, start);
     gain.gain.exponentialRampToValueAtTime(peak, start + 0.008);

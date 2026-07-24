@@ -1,4 +1,5 @@
 import { defineConfig } from 'vite';
+import { resolve } from 'node:path';
 import { VitePWA } from 'vite-plugin-pwa';
 
 // Deployed to GitHub Pages under https://<user>.github.io/tileswitch/, so the
@@ -7,6 +8,17 @@ const base = process.env.NODE_ENV === 'production' ? '/tileswitch/' : '/';
 
 export default defineConfig({
   base,
+  build: {
+    rollupOptions: {
+      // Two independent HTML entries. The app and the kinetic-typography
+      // trailer (served at /trailer/) are fully code-split: visiting one never
+      // downloads the other's bundle. See trailer/README-inline notes.
+      input: {
+        main: resolve(__dirname, 'index.html'),
+        trailer: resolve(__dirname, 'trailer/index.html'),
+      },
+    },
+  },
   plugins: [
     VitePWA({
       registerType: 'autoUpdate',
