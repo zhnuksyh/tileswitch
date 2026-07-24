@@ -6,16 +6,19 @@ export default {
       fontFamily: {
         sans: ['Fredoka', 'system-ui', 'sans-serif'],
       },
+      // "Void" preset — pure black / white / grey. Kept as the `base`/`accent`
+      // names the whole UI already references, so the switch is palette-only.
       colors: {
         base: {
-          900: '#0f172a',
-          800: '#1e293b',
-          700: '#334155',
-          600: '#475569',
+          900: '#0a0a0a',
+          800: '#171717',
+          700: '#262626',
+          600: '#404040',
         },
+        // Highlights read as "brighter grey" rather than stark white.
         accent: {
-          DEFAULT: '#38bdf8',
-          hover: '#0ea5e9',
+          DEFAULT: '#d4d4d4',
+          hover: '#e5e5e5',
         },
       },
     },

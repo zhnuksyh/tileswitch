@@ -1,24 +1,26 @@
-// The built-in image library: categories of ready-to-play pictures bundled
-// under /public/library/<category>/. Swap the placeholder files for real
-// artwork keeping the same filenames and these entries stay valid.
+// The image library the puzzle draws from. Two sources, merged into one flat
+// pool:
 //
-// Paths are resolved against Vite's BASE_URL so they work both at the domain
-// root and under a project subpath (e.g. GitHub Pages /<repo>/).
+//   1. public   — 5 bundled placeholder images under /public/library. These are
+//                 the starter set everyone begins with.
+//   2. uploaded — images the user adds at runtime (drag-drop / file-select),
+//                 re-encoded to WebP and stored as Blobs in IndexedDB
+//                 (see uploads.ts / db.ts).
+//
+// The public set shows only while the user has no uploads of their own; once
+// they add images, the library becomes theirs.
 
-export type CategoryId = 'anime' | 'cartoon' | 'vector';
+import { loadUploads, type UploadedImage } from './uploads';
+
+export type ImageSource = 'public' | 'uploaded';
 
 export interface LibraryImage {
+  /** Stable identity, unique across the whole pool. */
   id: string;
   title: string;
-  /** Absolute-from-base URL, e.g. '/library/anime/spirited-away.png'. */
+  /** Resolvable URL: bundled asset URL, or an object URL for uploads. */
   src: string;
-  category: CategoryId;
-}
-
-export interface Category {
-  id: CategoryId;
-  label: string;
-  images: LibraryImage[];
+  source: ImageSource;
 }
 
 /** Prefix a public-asset path with Vite's base URL (handles subpath deploys). */
@@ -26,46 +28,37 @@ function asset(path: string): string {
   return import.meta.env.BASE_URL.replace(/\/$/, '') + path;
 }
 
-function img(
-  category: CategoryId,
-  file: string,
-  title: string,
-): LibraryImage {
-  const id = file.replace(/\.[^.]+$/, '');
-  return {
-    id: `${category}/${id}`,
-    title,
-    src: asset(`/library/${category}/${file}`),
-    category,
-  };
+// --- Source 1: public placeholders (starter set) ---------------------------
+// Six bundled library PNGs — the placeholder grid shown while the user has no
+// uploads of their own, so the setup screen is never empty.
+const PUBLIC_FILES: { file: string; title: string }[] = [
+  { file: 'anime/spirited-away.png', title: 'Spirited Away' },
+  { file: 'anime/your-name.png', title: 'Your Name' },
+  { file: 'cartoon/spongebob.png', title: 'SpongeBob' },
+  { file: 'cartoon/adventure-time.png', title: 'Adventure Time' },
+  { file: 'vector/mountain-sunrise.png', title: 'Mountain Sunrise' },
+  { file: 'vector/tropical-beach.png', title: 'Tropical Beach' },
+];
+
+const publicImages: LibraryImage[] = PUBLIC_FILES.map(({ file, title }) => ({
+  id: `public:${file}`,
+  title,
+  src: asset(`/library/${file}`),
+  source: 'public' as const,
+}));
+
+function uploadToImage(u: UploadedImage): LibraryImage {
+  return { id: u.id, title: u.title, src: u.url, source: 'uploaded' };
 }
 
-export const categories: Category[] = [
-  {
-    id: 'anime',
-    label: 'Anime',
-    images: [
-      img('anime', 'spirited-away.png', 'Spirited Away'),
-      img('anime', 'your-name.png', 'Your Name'),
-      img('anime', 'demon-slayer.png', 'Demon Slayer'),
-    ],
-  },
-  {
-    id: 'cartoon',
-    label: 'Cartoon',
-    images: [
-      img('cartoon', 'tom-and-jerry.png', 'Tom and Jerry'),
-      img('cartoon', 'spongebob.png', 'SpongeBob'),
-      img('cartoon', 'adventure-time.png', 'Adventure Time'),
-    ],
-  },
-  {
-    id: 'vector',
-    label: 'Vector art',
-    images: [
-      img('vector', 'mountain-sunrise.png', 'Mountain Sunrise'),
-      img('vector', 'city-skyline.png', 'City Skyline'),
-      img('vector', 'tropical-beach.png', 'Tropical Beach'),
-    ],
-  },
-];
+/**
+ * The full library pool, freshly assembled. Uploaded images always appear; the
+ * public starter set is included only while the user has no uploads.
+ *
+ * Async because uploads live in IndexedDB. Call this rather than caching — the
+ * upload set can change while the app is open.
+ */
+export async function getLibrary(): Promise<LibraryImage[]> {
+  const uploaded = (await loadUploads()).map(uploadToImage);
+  return uploaded.length ? uploaded : publicImages;
+}

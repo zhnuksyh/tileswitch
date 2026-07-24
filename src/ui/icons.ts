@@ -8,6 +8,14 @@ import {
   ArrowLeft,
   Volume2,
   VolumeX,
+  Eye,
+  Shuffle,
+  Trash2,
+  Timer,
+  Flame,
+  Star,
+  SlidersHorizontal,
+  X,
   type IconNode,
 } from 'lucide';
 
@@ -30,4 +38,12 @@ export const icons = {
   back: ArrowLeft,
   soundOn: Volume2,
   soundOff: VolumeX,
+  peek: Eye,
+  shuffle: Shuffle,
+  trash: Trash2,
+  timer: Timer,
+  streak: Flame,
+  score: Star,
+  settings: SlidersHorizontal,
+  close: X,
 };

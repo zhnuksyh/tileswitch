@@ -5,6 +5,9 @@
 @layer base {
   html {
     color-scheme: dark;
+    /* Void base — always solid behind the app, and behind the optional
+       custom background layer (#app-bg) which sits at z-index -10. */
+    background-color: #0a0a0a;
   }
   body {
     -webkit-tap-highlight-color: transparent;
