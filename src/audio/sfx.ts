@@ -109,10 +109,12 @@ const RECIPES: Record<SoundName, () => Tone[]> = {
     { freq: 440, dur: 0.08, gain: 0.24 },
     { freq: 587.33, delay: 0.06, dur: 0.1, gain: 0.24 },
   ],
-  // Correct placement: gentle rising perfect fifth.
+  // Correct placement: a soft, rounded "plink" — a warm sine note with a
+  // gentle octave shimmer on top. Mellower and less shrill than a bright
+  // triangle chirp, so it stays pleasant over a long solve.
   place: () => [
-    { freq: 659.25, dur: 0.1, gain: 0.26 },
-    { freq: 987.77, delay: 0.07, dur: 0.16, gain: 0.24, type: 'triangle' },
+    { freq: 587.33, dur: 0.14, gain: 0.24, type: 'sine' },
+    { freq: 1174.66, delay: 0.02, dur: 0.09, gain: 0.08, type: 'sine' },
   ],
   // Invalid / no-op: low soft thud.
   invalid: () => [{ freq: 174.61, dur: 0.12, gain: 0.2, type: 'triangle' }],
