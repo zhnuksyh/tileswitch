@@ -3,8 +3,14 @@ import { getLibrary, type LibraryImage } from '../library/manifest';
 import { addUploads, removeUpload, reorderUploads } from '../library/uploads';
 import { nextImage, markSeen } from '../library/rotation';
 import { setBackground, clearBackground, hasBackground } from '../library/background';
-import { recordPlayed, getHistory } from '../library/history';
+import { recordPlayed, getHistory, type HistoryItem } from '../library/history';
 import { getNote, setNote, hasNote, NOTE_MAX_LEN } from '../library/notes';
+import {
+  buildShareCard,
+  downloadCard,
+  nativeShareCard,
+  canNativeShareFiles,
+} from '../library/share';
 import { play } from '../audio/sfx';
 import { animate } from './motion';
 import { DIFFICULTIES, DEFAULT_DIFFICULTY } from '../game/difficulty';
@@ -20,6 +26,8 @@ export interface SetupResult {
   image: HTMLImageElement;
   /** Tiles along the image's shorter side — higher is harder. */
   baseTiles: number;
+  /** Difficulty label (e.g. 'Easy'), for history metadata. */
+  difficultyLabel: string;
   /** The library entry chosen, for notes/history/next-puzzle context. */
   entry: LibraryImage;
   /** The full library pool at start time, for the next-puzzle rotation. */
@@ -252,6 +260,7 @@ export function renderSetup(
     selectImage(entry, { count: true });
   });
 
+
   // --- Library grid (3×2, with a "View more" 6th cell) ---------------------
   const thumbButtons = new Map<string, HTMLButtonElement>();
 
@@ -411,18 +420,30 @@ export function renderSetup(
   };
 
   // --- History grid (recently-played images) --------------------------------
+  const openHistoryDetail = (image: LibraryImage) => {
+    showHistoryDetail(container, image, {
+      onNoteChange: renderHistory,
+    });
+  };
+
   const renderHistory = () => {
     historyGrid.innerHTML = '';
     const history = getHistory(library);
-    // Show up to six recent plays; clicking one opens its detail (note + play).
-    for (const image of history.slice(0, 6)) {
+    // Show two recent plays inline; the third cell is "View more" (like the
+    // library grid) opening the full history modal. If there are 3 or fewer,
+    // just show them all inline (no need for a view-more tile).
+    const hasMore = history.length > 3;
+    const inline = hasMore ? history.slice(0, 2) : history.slice(0, 3);
+    for (const image of inline) {
+      historyGrid.appendChild(renderHistoryThumb(image, () => openHistoryDetail(image)));
+    }
+    if (hasMore) {
       historyGrid.appendChild(
-        renderHistoryThumb(image, () => {
-          showHistoryDetail(container, image, {
-            onPlay: () => selectImage(image),
-            onNoteChange: renderHistory,
-          });
-        }),
+        renderViewMore(history.length - inline.length, () =>
+          showHistoryModal(container, history, {
+            onOpen: openHistoryDetail,
+          }),
+        ),
       );
     }
     const has = history.length > 0;
@@ -482,6 +503,7 @@ export function renderSetup(
     onStart({
       image: selectedImage,
       baseTiles: selectedDifficulty.baseTiles,
+      difficultyLabel: selectedDifficulty.label,
       entry: selectedEntry,
       library,
     });
@@ -755,29 +777,45 @@ function showAllImages(
   );
 }
 
-// A history thumbnail: the image with a title strip and a note-dot when the
-// image has a saved note. Clicking opens its detail panel.
+/** mm:ss from milliseconds. */
+function fmtTime(ms: number): string {
+  const total = Math.floor(ms / 1000);
+  const m = Math.floor(total / 60);
+  const s = total % 60;
+  return `${m}:${s.toString().padStart(2, '0')}`;
+}
+
+/** Short local date like "24 Jul". */
+function fmtDate(ms: number): string {
+  return new Date(ms).toLocaleDateString(undefined, { day: 'numeric', month: 'short' });
+}
+
+// A history card: the image with a title strip, a note-dot when it has a note,
+// and a metadata footer (solve time · date · difficulty). Clicking opens the
+// detail panel.
 function renderHistoryThumb(
-  image: LibraryImage,
+  image: HistoryItem,
   onOpen: () => void,
 ): HTMLButtonElement {
   const btn = document.createElement('button');
   btn.className =
-    'relative aspect-video rounded-xl overflow-hidden bg-base-900 ring-1 ring-base-700 hover:ring-base-500 transition-all group';
+    'flex flex-col rounded-xl overflow-hidden bg-base-900 ring-1 ring-base-700 hover:ring-base-500 transition-all text-left';
   btn.title = image.title;
 
+  const frame = document.createElement('div');
+  frame.className = 'relative aspect-video';
   const img = document.createElement('img');
   img.className = 'w-full h-full object-cover';
   img.loading = 'lazy';
   img.alt = image.title;
   img.src = image.src;
-  btn.appendChild(img);
+  frame.appendChild(img);
 
   const label = document.createElement('span');
   label.className =
     'absolute inset-x-0 bottom-0 px-2 py-1 text-[11px] font-medium text-white text-left bg-gradient-to-t from-black/70 to-transparent truncate';
   label.textContent = image.title;
-  btn.appendChild(label);
+  frame.appendChild(label);
 
   if (hasNote(image.id)) {
     const dot = document.createElement('span');
@@ -785,19 +823,118 @@ function renderHistoryThumb(
       'absolute top-1.5 right-1.5 grid place-items-center w-5 h-5 rounded-full bg-accent text-base-900 shadow';
     dot.title = 'Has a note';
     dot.appendChild(icon(icons.note, 'w-3 h-3'));
-    btn.appendChild(dot);
+    frame.appendChild(dot);
   }
+  btn.appendChild(frame);
+
+  // Metadata footer.
+  const meta = document.createElement('div');
+  meta.className = 'flex items-center gap-2 px-2 py-1.5 text-[10px] text-slate-400';
+  if (image.solvedAt !== undefined) {
+    const time = document.createElement('span');
+    time.className = 'flex items-center gap-1 tabular-nums text-slate-300';
+    time.appendChild(icon(icons.timer, 'w-3 h-3'));
+    time.appendChild(document.createTextNode(fmtTime(image.bestTimeMs ?? 0)));
+    meta.appendChild(time);
+
+    const date = document.createElement('span');
+    date.className = 'tabular-nums';
+    date.textContent = fmtDate(image.solvedAt);
+    meta.appendChild(date);
+
+    if (image.difficulty) {
+      const diff = document.createElement('span');
+      diff.className = 'ml-auto px-1.5 py-0.5 rounded-full bg-base-700 text-slate-300';
+      diff.textContent = image.difficulty;
+      meta.appendChild(diff);
+    }
+  } else {
+    const pending = document.createElement('span');
+    pending.className = 'text-slate-500';
+    pending.textContent = 'Played · not solved yet';
+    meta.appendChild(pending);
+  }
+  btn.appendChild(meta);
 
   btn.addEventListener('click', onOpen);
   return btn;
 }
 
-// Detail panel for a played image: large preview, its note (read + edit), a
-// Play button, and a Share stub (coming soon).
+// Full-history modal: every recently-played image in a scrollable grid.
+// Clicking one opens its detail panel.
+function showHistoryModal(
+  host: HTMLElement,
+  history: LibraryImage[],
+  opts: { onOpen: (image: LibraryImage) => void },
+): void {
+  play('select');
+
+  const overlay = document.createElement('div');
+  overlay.className =
+    'fixed inset-0 z-50 flex items-center justify-center p-6 bg-black/60 backdrop-blur-sm';
+
+  const cardEl = document.createElement('div');
+  cardEl.className =
+    'flex flex-col gap-4 p-5 rounded-3xl bg-base-800 ring-1 ring-base-700 w-full max-w-lg max-h-[85vh] shadow-2xl';
+
+  const head = document.createElement('div');
+  head.className = 'flex items-center justify-between gap-3';
+  const title = document.createElement('h2');
+  title.className = 'text-lg font-semibold';
+  title.textContent = 'History';
+  head.appendChild(title);
+  const closeBtn = document.createElement('button');
+  closeBtn.className =
+    'shrink-0 grid place-items-center w-8 h-8 rounded-full bg-base-700 hover:bg-base-600 transition-colors';
+  closeBtn.setAttribute('aria-label', 'Close');
+  closeBtn.appendChild(icon(icons.close, 'w-4 h-4'));
+  head.appendChild(closeBtn);
+  cardEl.appendChild(head);
+
+  const scroll = document.createElement('div');
+  scroll.className = 'overflow-y-auto -mr-2 pr-2';
+  const grid = document.createElement('div');
+  grid.className = 'grid grid-cols-3 gap-3';
+  for (const image of history) {
+    grid.appendChild(
+      renderHistoryThumb(image, () => {
+        close();
+        opts.onOpen(image);
+      }),
+    );
+  }
+  scroll.appendChild(grid);
+  cardEl.appendChild(scroll);
+
+  const close = () => {
+    const anim = animate(overlay, [{ opacity: 1 }, { opacity: 0 }], { duration: 150 });
+    if (anim) anim.finished.then(() => overlay.remove());
+    else overlay.remove();
+  };
+  closeBtn.addEventListener('click', close);
+  overlay.addEventListener('click', (e) => {
+    if (e.target === overlay) close();
+  });
+
+  overlay.appendChild(cardEl);
+  host.appendChild(overlay);
+  animate(overlay, [{ opacity: 0 }, { opacity: 1 }], { duration: 160 });
+  animate(
+    cardEl,
+    [
+      { opacity: 0, transform: 'scale(0.96) translateY(8px)' },
+      { opacity: 1, transform: 'scale(1) translateY(0)' },
+    ],
+    { duration: 220, easing: 'cubic-bezier(0.22, 1, 0.36, 1)' },
+  );
+}
+
+// Detail panel for a played image: large preview, its note (read + edit), and
+// a Share action that exports an image card (picture + note) for social media.
 function showHistoryDetail(
   host: HTMLElement,
   image: LibraryImage,
-  opts: { onPlay: () => void; onNoteChange: () => void },
+  opts: { onNoteChange: () => void },
 ): void {
   play('select');
 
@@ -833,13 +970,7 @@ function showHistoryDetail(
   frame.appendChild(img);
   cardEl.appendChild(frame);
 
-  // Note (editable here too).
-  const noteLabel = document.createElement('label');
-  noteLabel.className = 'flex items-center gap-1.5 text-xs font-medium text-slate-400';
-  noteLabel.appendChild(icon(icons.note, 'w-3.5 h-3.5'));
-  noteLabel.appendChild(document.createTextNode('Note'));
-  cardEl.appendChild(noteLabel);
-
+  // Note (editable here too) — no label, the placeholder carries the meaning.
   const noteInput = document.createElement('textarea');
   noteInput.className =
     'w-full resize-none rounded-2xl bg-base-900/70 ring-1 ring-base-700 focus:ring-accent outline-none px-4 py-3 text-sm placeholder:text-slate-600 transition-shadow';
@@ -862,26 +993,51 @@ function showHistoryDetail(
     else overlay.remove();
   };
 
-  // Share — stubbed for now.
+  // Share: compose the image + note into a social-style image card and either
+  // open the native share sheet (mobile) or download the PNG.
+  const nativeShare = canNativeShareFiles();
   const shareBtn = document.createElement('button');
   shareBtn.className =
-    'flex items-center justify-center gap-2 px-5 py-2.5 rounded-full bg-base-700 text-slate-400 font-medium cursor-not-allowed';
-  shareBtn.disabled = true;
-  shareBtn.appendChild(icon(icons.share, 'w-4 h-4'));
-  shareBtn.appendChild(document.createTextNode('Share (soon)'));
-  row.appendChild(shareBtn);
-
-  const playBtn = document.createElement('button');
-  playBtn.className =
-    'flex-1 flex items-center justify-center gap-2 px-5 py-2.5 rounded-full bg-accent hover:bg-accent-hover text-base-900 font-semibold transition-colors';
-  playBtn.appendChild(icon(icons.puzzle, 'w-4 h-4'));
-  playBtn.appendChild(document.createTextNode('Play this'));
-  playBtn.addEventListener('click', () => {
-    close();
-    opts.onPlay();
+    'flex-1 flex items-center justify-center gap-2 px-5 py-2.5 rounded-full bg-accent hover:bg-accent-hover text-base-900 font-semibold transition-colors disabled:opacity-60 disabled:pointer-events-none';
+  const defaultLabel = nativeShare ? 'Share card' : 'Save card';
+  const setShareLabel = (text: string) => {
+    shareBtn.innerHTML = '';
+    shareBtn.appendChild(icon(icons.share, 'w-4 h-4'));
+    shareBtn.appendChild(document.createTextNode(text));
+  };
+  setShareLabel(defaultLabel);
+  shareBtn.addEventListener('click', async () => {
+    shareBtn.disabled = true;
+    setShareLabel('Preparing…');
+    try {
+      const blob = await buildShareCard({
+        title: image.title,
+        note: getNote(image.id),
+        src: image.src,
+      });
+      let ok = false;
+      if (nativeShare) ok = await nativeShareCard(blob, image.title);
+      if (!ok) downloadCard(blob, image.title);
+      setShareLabel(nativeShare && ok ? 'Shared ✓' : 'Saved ✓');
+      play('place');
+    } catch (err) {
+      console.warn('Share failed:', err);
+      setShareLabel('Could not share');
+    }
+    window.setTimeout(() => {
+      setShareLabel(defaultLabel);
+      shareBtn.disabled = false;
+    }, 1600);
   });
-  row.appendChild(playBtn);
+  row.appendChild(shareBtn);
   cardEl.appendChild(row);
+
+  const shareHint = document.createElement('p');
+  shareHint.className = 'text-[11px] text-slate-500 text-center';
+  shareHint.textContent = nativeShare
+    ? 'Shares an image card of this picture and its note.'
+    : 'Saves an image card (picture + note) you can post anywhere.';
+  cardEl.appendChild(shareHint);
 
   closeBtn.addEventListener('click', close);
   overlay.addEventListener('click', (e) => {
