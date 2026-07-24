@@ -1,8 +1,9 @@
 import { icon, icons } from './icons';
 import { getLibrary, type LibraryImage } from '../library/manifest';
-import { addUploads, removeUpload } from '../library/uploads';
+import { addUploads, removeUpload, reorderUploads } from '../library/uploads';
 import { nextImage, markSeen } from '../library/rotation';
 import { setBackground, clearBackground, hasBackground } from '../library/background';
+import { recordPlayed, getHistory } from '../library/history';
 import { play } from '../audio/sfx';
 import { animate } from './motion';
 import { DIFFICULTIES, DEFAULT_DIFFICULTY } from '../game/difficulty';
@@ -32,6 +33,7 @@ export function renderSetup(
 ): void {
   let selectedImage: HTMLImageElement | null = null;
   let selectedId: string | null = null;
+  let selectedEntry: LibraryImage | null = null;
   let selectedDifficulty = DEFAULT_DIFFICULTY;
   let library: LibraryImage[] = [];
 
@@ -73,7 +75,7 @@ export function renderSetup(
   // bottom edges line up on the same lines for a clean, aligned look. On mobile
   // everything collapses to a single stacked column.
   //   Row 1: preview  (left)  ·  library grid (right)
-  //   Row 2: upload    (left)  ·  difficulty + start (right)
+  //   Row 2: history  (left)  ·  difficulty + start (right)
   const layout = document.createElement('div');
   layout.className = 'w-full max-w-5xl flex flex-col gap-5';
   container.appendChild(layout);
@@ -113,16 +115,27 @@ export function renderSetup(
     'flex flex-col gap-4 p-5 rounded-3xl bg-base-800/60 ring-1 ring-base-700';
   row1.appendChild(libraryCard);
 
-  // ==== Row 2 left: upload box =============================================
-  const uploadCard = document.createElement('div');
-  uploadCard.className =
-    'flex p-5 rounded-3xl bg-base-800/60 ring-1 ring-base-700';
+  // ==== Row 2 left: recently-played history ================================
+  const historyCard = document.createElement('div');
+  historyCard.className =
+    'flex flex-col gap-3 p-5 rounded-3xl bg-base-800/60 ring-1 ring-base-700';
+  const historyTitle = document.createElement('span');
+  historyTitle.className = 'text-sm font-semibold text-slate-200';
+  historyTitle.textContent = 'History';
+  historyCard.appendChild(historyTitle);
+  const historyGrid = document.createElement('div');
+  historyGrid.className = 'grid grid-cols-3 gap-3';
+  historyCard.appendChild(historyGrid);
+  const historyEmpty = document.createElement('p');
+  historyEmpty.className = 'text-[11px] text-slate-500';
+  historyEmpty.textContent = 'Images you play appear here.';
+  historyCard.appendChild(historyEmpty);
 
   // ==== Row 2 right column: difficulty + start =============================
   const rightCol = document.createElement('div');
   rightCol.className = 'flex flex-col gap-5';
 
-  row2.appendChild(uploadCard);
+  row2.appendChild(historyCard);
   row2.appendChild(rightCol);
 
   const libHead = document.createElement('div');
@@ -212,6 +225,7 @@ export function renderSetup(
     img.onload = () => {
       selectedImage = img;
       selectedId = entry.id;
+      selectedEntry = entry;
       setPreview(entry, 'none');
       previewImg.src = entry.src;
       enableStart();
@@ -259,22 +273,22 @@ export function renderSetup(
     thumbButtons.clear();
 
     const uploads = uploadCount();
-    const showingPlaceholders = uploads === 0;
 
-    // Placeholder set (no uploads): show all five, then an "Add image" tile in
-    // the sixth cell that opens the upload dialog. Uploaded library: show up to
-    // six inline; beyond six the sixth cell becomes "View more".
-    const inlineCount = !showingPlaceholders && library.length > 6 ? 5 : 6;
-    const inline = library.slice(0, inlineCount);
+    // The home grid always holds up to six cells and shows the first five
+    // images. Beyond five images, the sixth cell is "View more" (opening the
+    // full library, where the Add-image tile lives). At five or fewer, the
+    // sixth cell is the Add-image tile itself so you can always add more.
+    const hasMore = library.length > 5;
+    const inline = library.slice(0, hasMore ? 5 : library.length);
     for (const image of inline) {
       grid.appendChild(renderThumb(image, selectImage, thumbButtons, onRemove));
     }
-    if (showingPlaceholders) {
-      grid.appendChild(renderAddTile(() => openUploadDialog()));
-    } else if (library.length > 6) {
+    if (hasMore) {
       grid.appendChild(
         renderViewMore(library.length - inline.length, () => showLibraryModal()),
       );
+    } else {
+      grid.appendChild(renderAddTile(() => openUploadDialog()));
     }
 
     refreshSelection();
@@ -285,12 +299,18 @@ export function renderSetup(
       : 'Placeholder set — add your own images to make it yours';
   };
 
-  // Full-library modal: every image in a scrollable grid.
+  // Full-library modal: every image in a scrollable grid, with drag-to-reorder
+  // and an Add-image tile.
   const showLibraryModal = () => {
     play('select');
-    showAllImages(container, library, selectedId, (entry) => {
-      selectImage(entry, { count: true });
-    }, onRemove);
+    showAllImages(container, library, selectedId, {
+      onPick: (entry) => selectImage(entry, { count: true }),
+      onRemove,
+      onReorder: (orderedIds) => {
+        void reorderUploads(orderedIds).then(refreshLibrary);
+      },
+      onAdd: openUploadDialog,
+    });
   };
 
   // Re-read the pool after uploads change, keeping the current selection valid.
@@ -305,10 +325,12 @@ export function renderSetup(
     if (selectedId && !library.some((i) => i.id === selectedId)) {
       selectedId = null;
       selectedImage = null;
+      selectedEntry = null;
       startBtn.disabled = true;
       startBtn.classList.add('opacity-50', 'pointer-events-none');
     }
     renderGrid();
+    renderHistory();
 
     // First population: seed the carousel with a random image and start it.
     if (first && library.length > 0) {
@@ -383,8 +405,21 @@ export function renderSetup(
     gridFileInput.click();
   };
 
-  const addZone = renderAddZone((files) => void handleFiles(files));
-  uploadCard.appendChild(addZone);
+  // --- History grid (recently-played images) --------------------------------
+  const renderHistory = () => {
+    historyGrid.innerHTML = '';
+    const history = getHistory(library);
+    // Show up to six recent plays; picking one re-selects it for another go.
+    for (const image of history.slice(0, 6)) {
+      const btn = renderThumb(image, selectImage, new Map(), onRemove, {
+        removable: false,
+      });
+      historyGrid.appendChild(btn);
+    }
+    const has = history.length > 0;
+    historyGrid.classList.toggle('hidden', !has);
+    historyEmpty.classList.toggle('hidden', has);
+  };
 
   // Difficulty selector: sets how fine the tile grid is.
   const diffSection = document.createElement('div');
@@ -433,6 +468,8 @@ export function renderSetup(
   startBtn.appendChild(document.createTextNode('Start Puzzle'));
   startBtn.addEventListener('click', () => {
     if (!selectedImage) return;
+    // Record this image as recently played so it shows in the History grid.
+    if (selectedEntry) recordPlayed(selectedEntry);
     onStart({
       image: selectedImage,
       baseTiles: selectedDifficulty.baseTiles,
@@ -477,7 +514,9 @@ function renderThumb(
   onPick: (image: LibraryImage) => void,
   registry: Map<string, HTMLButtonElement>,
   onRemove: (id: string) => void,
+  options: { removable?: boolean } = {},
 ): HTMLButtonElement {
+  const removable = options.removable ?? true;
   const btn = document.createElement('button');
   btn.className = thumbClass(false);
   btn.title = image.title;
@@ -495,8 +534,8 @@ function renderThumb(
   label.textContent = image.title;
   btn.appendChild(label);
 
-  // Uploaded images can be removed.
-  if (image.source === 'uploaded') {
+  // Uploaded images can be removed (unless the caller opts out, e.g. history).
+  if (image.source === 'uploaded' && removable) {
     const del = document.createElement('span');
     del.className =
       'absolute top-1 right-1 grid place-items-center w-6 h-6 rounded-full bg-black/60 text-white opacity-0 group-hover:opacity-100 hover:bg-red-500 transition-opacity';
@@ -551,14 +590,24 @@ function renderViewMore(hidden: number, onClick: () => void): HTMLButtonElement 
   return btn;
 }
 
+interface LibraryModalOptions {
+  onPick: (image: LibraryImage) => void;
+  onRemove: (id: string) => void;
+  /** Persist a new order of uploaded-image ids. */
+  onReorder: (orderedIds: string[]) => void;
+  /** Open the file picker to add more images. */
+  onAdd: () => void;
+}
+
 // Full-library modal: every image in a scrollable grid. Picking one closes the
-// modal and selects it.
+// modal and selects it. Uploaded images can be dragged to reorder; the new
+// order drives which five appear on the home grid. An "Add image" tile sits at
+// the very end.
 function showAllImages(
   host: HTMLElement,
   library: LibraryImage[],
   selectedId: string | null,
-  onPick: (image: LibraryImage) => void,
-  onRemove: (id: string) => void,
+  opts: LibraryModalOptions,
 ): void {
   const overlay = document.createElement('div');
   overlay.className =
@@ -582,11 +631,19 @@ function showAllImages(
   head.appendChild(closeBtn);
   cardEl.appendChild(head);
 
+  // Only uploaded images can be reordered (placeholders are a fixed set).
+  const reorderable = library.some((i) => i.source === 'uploaded');
+  const hint = document.createElement('p');
+  hint.className = 'text-[11px] text-slate-500 -mt-2';
+  hint.textContent = reorderable
+    ? 'Drag to reorder — the first five show on the home screen.'
+    : 'Add your own images to build a library you can reorder.';
+  cardEl.appendChild(hint);
+
   const scroll = document.createElement('div');
   scroll.className = 'overflow-y-auto -mx-1 px-1 no-scrollbar';
   const modalGrid = document.createElement('div');
   modalGrid.className = 'grid grid-cols-3 sm:grid-cols-4 gap-3';
-  const registry = new Map<string, HTMLButtonElement>();
 
   const close = () => {
     const anim = animate(overlay, [{ opacity: 1 }, { opacity: 0 }], { duration: 160 });
@@ -594,23 +651,78 @@ function showAllImages(
     else overlay.remove();
   };
 
-  for (const image of library) {
-    const btn = renderThumb(
-      image,
-      (img) => {
-        onPick(img);
-        close();
-      },
-      registry,
-      (id) => {
-        onRemove(id);
-        const b = registry.get(id);
-        if (b) b.remove();
-      },
-    );
-    if (image.id === selectedId) btn.className = thumbClass(true);
-    modalGrid.appendChild(btn);
-  }
+  // Working copy of the order; committed via onReorder on each drop.
+  let order = library.map((i) => i.id);
+  const byId = new Map(library.map((i) => [i.id, i]));
+
+  // Commit the current order of uploaded ids (placeholders are excluded).
+  const commitOrder = () => {
+    const uploadedIds = order.filter((id) => byId.get(id)?.source === 'uploaded');
+    opts.onReorder(uploadedIds);
+  };
+
+  let dragId: string | null = null;
+
+  const rebuild = () => {
+    modalGrid.innerHTML = '';
+    for (const id of order) {
+      const image = byId.get(id);
+      if (!image) continue;
+      const btn = renderThumb(
+        image,
+        (img) => {
+          opts.onPick(img);
+          close();
+        },
+        new Map(),
+        (rid) => {
+          opts.onRemove(rid);
+          order = order.filter((x) => x !== rid);
+          byId.delete(rid);
+          rebuild();
+        },
+      );
+      if (image.id === selectedId) btn.className = thumbClass(true);
+
+      // Drag-to-reorder (uploaded images only).
+      if (image.source === 'uploaded') {
+        btn.draggable = true;
+        btn.classList.add('cursor-grab');
+        btn.addEventListener('dragstart', (e) => {
+          dragId = id;
+          btn.classList.add('opacity-40');
+          e.dataTransfer?.setData('text/plain', id);
+          if (e.dataTransfer) e.dataTransfer.effectAllowed = 'move';
+        });
+        btn.addEventListener('dragend', () => {
+          dragId = null;
+          btn.classList.remove('opacity-40');
+        });
+        btn.addEventListener('dragover', (e) => {
+          e.preventDefault();
+          if (e.dataTransfer) e.dataTransfer.dropEffect = 'move';
+        });
+        btn.addEventListener('drop', (e) => {
+          e.preventDefault();
+          const from = dragId;
+          if (!from || from === id) return;
+          // Only reorder among uploaded images.
+          if (byId.get(from)?.source !== 'uploaded') return;
+          order = order.filter((x) => x !== from);
+          const targetIndex = order.indexOf(id);
+          order.splice(targetIndex, 0, from);
+          commitOrder();
+          rebuild();
+        });
+      }
+
+      modalGrid.appendChild(btn);
+    }
+    // Add-image tile always last.
+    modalGrid.appendChild(renderAddTile(opts.onAdd));
+  };
+  rebuild();
+
   scroll.appendChild(modalGrid);
   cardEl.appendChild(scroll);
 
@@ -630,70 +742,6 @@ function showAllImages(
     ],
     { duration: 220, easing: 'cubic-bezier(0.22, 1, 0.36, 1)' },
   );
-}
-
-// Drag-and-drop zone with a file-select fallback. Calls back with picked files.
-function renderAddZone(
-  onFiles: (files: File[]) => void,
-): HTMLElement {
-  const zone = document.createElement('div');
-  zone.className =
-    'flex flex-col items-center justify-center gap-2 flex-1 py-5 px-4 rounded-2xl border-2 border-dashed border-base-700 text-center transition-colors';
-
-  const fileInput = document.createElement('input');
-  fileInput.type = 'file';
-  fileInput.accept = 'image/*';
-  fileInput.multiple = true;
-  fileInput.className = 'hidden';
-  fileInput.addEventListener('change', () => {
-    const files = fileInput.files ? Array.from(fileInput.files) : [];
-    if (files.length) onFiles(files);
-    fileInput.value = '';
-  });
-
-  const iconWrap = icon(icons.upload, 'w-6 h-6 text-slate-400');
-  zone.appendChild(iconWrap);
-
-  const chooseBtn = document.createElement('button');
-  chooseBtn.className =
-    'flex items-center gap-2 px-5 py-2 rounded-full bg-base-700 hover:bg-base-600 transition-colors text-sm font-medium';
-  chooseBtn.appendChild(document.createTextNode('Choose images'));
-  chooseBtn.addEventListener('click', () => fileInput.click());
-  zone.appendChild(chooseBtn);
-  zone.appendChild(fileInput);
-
-  const hint = document.createElement('p');
-  hint.className = 'text-slate-500 text-xs';
-  hint.textContent = 'or drag & drop here — saved to your library on this device';
-  zone.appendChild(hint);
-
-  // Drag styling + drop handling.
-  const highlight = (on: boolean) => {
-    zone.classList.toggle('border-accent', on);
-    zone.classList.toggle('bg-accent/5', on);
-  };
-  ['dragenter', 'dragover'].forEach((ev) =>
-    zone.addEventListener(ev, (e) => {
-      e.preventDefault();
-      highlight(true);
-    }),
-  );
-  ['dragleave', 'dragend'].forEach((ev) =>
-    zone.addEventListener(ev, (e) => {
-      e.preventDefault();
-      highlight(false);
-    }),
-  );
-  zone.addEventListener('drop', (e) => {
-    e.preventDefault();
-    highlight(false);
-    const dt = (e as DragEvent).dataTransfer;
-    if (!dt) return;
-    const files = Array.from(dt.files).filter((f) => f.type.startsWith('image/'));
-    if (files.length) onFiles(files);
-  });
-
-  return zone;
 }
 
 // Popup card shown when an upload would exceed MAX_LIBRARY_IMAGES. `added` is
