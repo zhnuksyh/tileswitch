@@ -4,6 +4,7 @@ import { addUploads, removeUpload, reorderUploads } from '../library/uploads';
 import { nextImage, markSeen } from '../library/rotation';
 import { setBackground, clearBackground, hasBackground } from '../library/background';
 import { recordPlayed, getHistory } from '../library/history';
+import { getNote, setNote, hasNote, NOTE_MAX_LEN } from '../library/notes';
 import { play } from '../audio/sfx';
 import { animate } from './motion';
 import { DIFFICULTIES, DEFAULT_DIFFICULTY } from '../game/difficulty';
@@ -19,6 +20,10 @@ export interface SetupResult {
   image: HTMLImageElement;
   /** Tiles along the image's shorter side — higher is harder. */
   baseTiles: number;
+  /** The library entry chosen, for notes/history/next-puzzle context. */
+  entry: LibraryImage;
+  /** The full library pool at start time, for the next-puzzle rotation. */
+  library: LibraryImage[];
 }
 
 // Cap on how many images the user's library can hold. IndexedDB could store far
@@ -409,12 +414,16 @@ export function renderSetup(
   const renderHistory = () => {
     historyGrid.innerHTML = '';
     const history = getHistory(library);
-    // Show up to six recent plays; picking one re-selects it for another go.
+    // Show up to six recent plays; clicking one opens its detail (note + play).
     for (const image of history.slice(0, 6)) {
-      const btn = renderThumb(image, selectImage, new Map(), onRemove, {
-        removable: false,
-      });
-      historyGrid.appendChild(btn);
+      historyGrid.appendChild(
+        renderHistoryThumb(image, () => {
+          showHistoryDetail(container, image, {
+            onPlay: () => selectImage(image),
+            onNoteChange: renderHistory,
+          });
+        }),
+      );
     }
     const has = history.length > 0;
     historyGrid.classList.toggle('hidden', !has);
@@ -467,12 +476,14 @@ export function renderSetup(
   startBtn.appendChild(icon(icons.puzzle, 'w-5 h-5'));
   startBtn.appendChild(document.createTextNode('Start Puzzle'));
   startBtn.addEventListener('click', () => {
-    if (!selectedImage) return;
+    if (!selectedImage || !selectedEntry) return;
     // Record this image as recently played so it shows in the History grid.
-    if (selectedEntry) recordPlayed(selectedEntry);
+    recordPlayed(selectedEntry);
     onStart({
       image: selectedImage,
       baseTiles: selectedDifficulty.baseTiles,
+      entry: selectedEntry,
+      library,
     });
   });
   rightCol.appendChild(startBtn);
@@ -725,6 +736,152 @@ function showAllImages(
 
   scroll.appendChild(modalGrid);
   cardEl.appendChild(scroll);
+
+  closeBtn.addEventListener('click', close);
+  overlay.addEventListener('click', (e) => {
+    if (e.target === overlay) close();
+  });
+
+  overlay.appendChild(cardEl);
+  host.appendChild(overlay);
+  animate(overlay, [{ opacity: 0 }, { opacity: 1 }], { duration: 160 });
+  animate(
+    cardEl,
+    [
+      { opacity: 0, transform: 'scale(0.96) translateY(8px)' },
+      { opacity: 1, transform: 'scale(1) translateY(0)' },
+    ],
+    { duration: 220, easing: 'cubic-bezier(0.22, 1, 0.36, 1)' },
+  );
+}
+
+// A history thumbnail: the image with a title strip and a note-dot when the
+// image has a saved note. Clicking opens its detail panel.
+function renderHistoryThumb(
+  image: LibraryImage,
+  onOpen: () => void,
+): HTMLButtonElement {
+  const btn = document.createElement('button');
+  btn.className =
+    'relative aspect-video rounded-xl overflow-hidden bg-base-900 ring-1 ring-base-700 hover:ring-base-500 transition-all group';
+  btn.title = image.title;
+
+  const img = document.createElement('img');
+  img.className = 'w-full h-full object-cover';
+  img.loading = 'lazy';
+  img.alt = image.title;
+  img.src = image.src;
+  btn.appendChild(img);
+
+  const label = document.createElement('span');
+  label.className =
+    'absolute inset-x-0 bottom-0 px-2 py-1 text-[11px] font-medium text-white text-left bg-gradient-to-t from-black/70 to-transparent truncate';
+  label.textContent = image.title;
+  btn.appendChild(label);
+
+  if (hasNote(image.id)) {
+    const dot = document.createElement('span');
+    dot.className =
+      'absolute top-1.5 right-1.5 grid place-items-center w-5 h-5 rounded-full bg-accent text-base-900 shadow';
+    dot.title = 'Has a note';
+    dot.appendChild(icon(icons.note, 'w-3 h-3'));
+    btn.appendChild(dot);
+  }
+
+  btn.addEventListener('click', onOpen);
+  return btn;
+}
+
+// Detail panel for a played image: large preview, its note (read + edit), a
+// Play button, and a Share stub (coming soon).
+function showHistoryDetail(
+  host: HTMLElement,
+  image: LibraryImage,
+  opts: { onPlay: () => void; onNoteChange: () => void },
+): void {
+  play('select');
+
+  const overlay = document.createElement('div');
+  overlay.className =
+    'fixed inset-0 z-50 flex items-center justify-center p-6 bg-black/60 backdrop-blur-sm';
+
+  const cardEl = document.createElement('div');
+  cardEl.className =
+    'flex flex-col gap-4 p-5 rounded-3xl bg-base-800 ring-1 ring-base-700 w-full max-w-md shadow-2xl';
+
+  const head = document.createElement('div');
+  head.className = 'flex items-center justify-between gap-3';
+  const title = document.createElement('h2');
+  title.className = 'text-lg font-semibold truncate';
+  title.textContent = image.title;
+  head.appendChild(title);
+  const closeBtn = document.createElement('button');
+  closeBtn.className =
+    'shrink-0 grid place-items-center w-8 h-8 rounded-full bg-base-700 hover:bg-base-600 transition-colors';
+  closeBtn.setAttribute('aria-label', 'Close');
+  closeBtn.appendChild(icon(icons.close, 'w-4 h-4'));
+  head.appendChild(closeBtn);
+  cardEl.appendChild(head);
+
+  const frame = document.createElement('div');
+  frame.className =
+    'w-full aspect-video rounded-2xl overflow-hidden bg-base-900 ring-1 ring-base-700';
+  const img = document.createElement('img');
+  img.className = 'w-full h-full object-cover';
+  img.alt = image.title;
+  img.src = image.src;
+  frame.appendChild(img);
+  cardEl.appendChild(frame);
+
+  // Note (editable here too).
+  const noteLabel = document.createElement('label');
+  noteLabel.className = 'flex items-center gap-1.5 text-xs font-medium text-slate-400';
+  noteLabel.appendChild(icon(icons.note, 'w-3.5 h-3.5'));
+  noteLabel.appendChild(document.createTextNode('Note'));
+  cardEl.appendChild(noteLabel);
+
+  const noteInput = document.createElement('textarea');
+  noteInput.className =
+    'w-full resize-none rounded-2xl bg-base-900/70 ring-1 ring-base-700 focus:ring-accent outline-none px-4 py-3 text-sm placeholder:text-slate-600 transition-shadow';
+  noteInput.rows = 3;
+  noteInput.maxLength = NOTE_MAX_LEN;
+  noteInput.placeholder = 'No note yet — add one.';
+  noteInput.value = getNote(image.id);
+  noteInput.addEventListener('input', () => {
+    setNote(image.id, noteInput.value);
+    opts.onNoteChange();
+  });
+  cardEl.appendChild(noteInput);
+
+  const row = document.createElement('div');
+  row.className = 'flex gap-3 mt-1';
+
+  const close = () => {
+    const anim = animate(overlay, [{ opacity: 1 }, { opacity: 0 }], { duration: 150 });
+    if (anim) anim.finished.then(() => overlay.remove());
+    else overlay.remove();
+  };
+
+  // Share — stubbed for now.
+  const shareBtn = document.createElement('button');
+  shareBtn.className =
+    'flex items-center justify-center gap-2 px-5 py-2.5 rounded-full bg-base-700 text-slate-400 font-medium cursor-not-allowed';
+  shareBtn.disabled = true;
+  shareBtn.appendChild(icon(icons.share, 'w-4 h-4'));
+  shareBtn.appendChild(document.createTextNode('Share (soon)'));
+  row.appendChild(shareBtn);
+
+  const playBtn = document.createElement('button');
+  playBtn.className =
+    'flex-1 flex items-center justify-center gap-2 px-5 py-2.5 rounded-full bg-accent hover:bg-accent-hover text-base-900 font-semibold transition-colors';
+  playBtn.appendChild(icon(icons.puzzle, 'w-4 h-4'));
+  playBtn.appendChild(document.createTextNode('Play this'));
+  playBtn.addEventListener('click', () => {
+    close();
+    opts.onPlay();
+  });
+  row.appendChild(playBtn);
+  cardEl.appendChild(row);
 
   closeBtn.addEventListener('click', close);
   overlay.addEventListener('click', (e) => {
