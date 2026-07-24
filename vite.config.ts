@@ -10,14 +10,23 @@ export default defineConfig({
   plugins: [
     VitePWA({
       registerType: 'autoUpdate',
-      includeAssets: ['favicon.svg'],
+      includeAssets: ['favicon.svg', 'icon-192.png', 'icon-512.png'],
+      devOptions: {
+        // Let the service worker run under `vite dev` so the PWA is testable.
+        enabled: true,
+      },
+      workbox: {
+        // Precache the built assets so the app works fully offline.
+        globPatterns: ['**/*.{js,css,html,svg,png,woff2}'],
+      },
       manifest: {
         name: 'TileSwitch',
         short_name: 'TileSwitch',
         description: 'Swap the tiles to rebuild the picture.',
-        theme_color: '#0f172a',
-        background_color: '#0f172a',
+        theme_color: '#0a0a0a',
+        background_color: '#0a0a0a',
         display: 'standalone',
+        orientation: 'portrait',
         icons: [
           {
             src: 'icon-192.png',

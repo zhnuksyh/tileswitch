@@ -3,6 +3,7 @@ import { renderSetup } from './ui/setup';
 import { renderGame } from './ui/game';
 import type { SetupResult } from './ui/setup';
 import { initAudio } from './audio/sfx';
+import { initPwa } from './pwa';
 import { initBackground } from './library/background';
 import { nextImage } from './library/rotation';
 import { recordPlayed } from './library/history';
@@ -14,6 +15,9 @@ if (!app) throw new Error('#app not found');
 
 // Unlock audio on the first user gesture (browser autoplay policy).
 initAudio();
+
+// Register the service worker + install prompt (PWA).
+initPwa();
 
 // Apply the saved custom background (if any) behind the app.
 void initBackground();
