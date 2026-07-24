@@ -30,7 +30,7 @@ function toUploaded(s: StoredUpload): UploadedImage {
   return { id: s.id, title: s.title, url: urlFor(s.id, s.blob), addedAt: s.addedAt };
 }
 
-/** Read all uploaded images, oldest first. */
+/** Read all uploaded images in library order (see getAllUploads). */
 export async function loadUploads(): Promise<UploadedImage[]> {
   try {
     const rows = await getAllUploads();
@@ -38,6 +38,30 @@ export async function loadUploads(): Promise<UploadedImage[]> {
   } catch (err) {
     console.warn('Could not read uploaded images.', err);
     return [];
+  }
+}
+
+/**
+ * Persist a new library order. `orderedIds` is the full list of upload ids in
+ * the desired order; each row's `order` is rewritten to its index so the
+ * sequence sticks across reloads. Ids not present are appended after, keeping
+ * their relative order.
+ */
+export async function reorderUploads(orderedIds: string[]): Promise<void> {
+  try {
+    const rows = await getAllUploads();
+    const rank = new Map(orderedIds.map((id, i) => [id, i]));
+    // Unlisted rows go after listed ones, preserving current order.
+    let tail = orderedIds.length;
+    const withRank = rows.map((row) => ({
+      row,
+      rank: rank.has(row.id) ? rank.get(row.id)! : tail++,
+    }));
+    await Promise.all(
+      withRank.map(({ row, rank }) => putUpload({ ...row, order: rank })),
+    );
+  } catch (err) {
+    console.warn('Could not save library order.', err);
   }
 }
 

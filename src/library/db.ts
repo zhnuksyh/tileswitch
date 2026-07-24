@@ -66,18 +66,36 @@ export interface StoredUpload {
   blob: Blob;
   type: string;
   addedAt: number;
+  /**
+   * User-defined position in the library (lower = earlier). Optional for
+   * backward compatibility; rows without it fall back to `addedAt` order.
+   */
+  order?: number;
 }
 
-/** All uploads, oldest first. */
+/**
+ * All uploads in library order: by `order` when set, else by insertion time.
+ * The library grid and rotation read this, so the persisted order sticks.
+ */
 export async function getAllUploads(): Promise<StoredUpload[]> {
   const db = await openDb();
-  return new Promise((resolve, reject) => {
+  const rows = await new Promise<StoredUpload[]>((resolve, reject) => {
     const t = db.transaction(STORE, 'readonly');
     const index = t.objectStore(STORE).index('addedAt');
     const req = index.getAll();
     req.onsuccess = () => resolve(req.result as StoredUpload[]);
     req.onerror = () => reject(req.error);
   });
+  // Stable sort: rows keep their addedAt order (getAll via the index) unless an
+  // explicit `order` moves them.
+  return rows
+    .map((row, i) => ({ row, i }))
+    .sort((a, b) => {
+      const ao = a.row.order ?? a.row.addedAt;
+      const bo = b.row.order ?? b.row.addedAt;
+      return ao === bo ? a.i - b.i : ao - bo;
+    })
+    .map(({ row }) => row);
 }
 
 export function putUpload(entry: StoredUpload): Promise<IDBValidKey> {
