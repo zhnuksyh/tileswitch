@@ -10,17 +10,49 @@ import { play, getAudioContext, setSfxBoost } from '../src/audio/sfx';
 
 export type SoundName = 'select' | 'swap' | 'place' | 'invalid' | 'win';
 
-let bedNodes: { osc: OscillatorNode; lfo: OscillatorNode; gain: GainNode }[] = [];
-let bedGain: GainNode | null = null;
+let musicGain: GainNode | null = null;
+let padOscs: OscillatorNode[] = [];
+let seqTimer: number | null = null;
 let started = false;
 
-// A calm two-chord pad loop in a minor-pentatonic-ish space — roots that sit
-// under the UI blips without clashing. Frequencies (Hz) per voice.
-const CHORD_A = [130.81, 196.0, 261.63, 392.0]; // C3 G3 C4 G4
-const CHORD_B = [146.83, 220.0, 293.66, 440.0]; // D3 A3 D4 A4
-const CHORD_LEN = 4.2; // seconds per chord
+// Upbeat, major-key track — the classic feel-good I–V–vi–IV loop in C major.
+// Each chord is a set of voice frequencies (Hz); a plucky arpeggio melody and a
+// soft bass note ride on top so the bed feels bouncy rather than droney.
+const BPM = 120;
+const BEAT = 60 / BPM; // 0.5s
+const BAR = BEAT * 4; // one chord per bar
 
-/** Boost SFX above the bed, and build the pad. Idempotent. */
+// I – V – vi – IV (C – G – Am – F). Bright and forward-moving.
+const PROG: { bass: number; chord: number[]; arp: number[] }[] = [
+  { bass: 130.81, chord: [261.63, 329.63, 392.0], arp: [523.25, 659.25, 783.99, 659.25] }, // C
+  { bass: 196.0, chord: [293.66, 392.0, 493.88], arp: [587.33, 739.99, 987.77, 739.99] }, // G
+  { bass: 220.0, chord: [261.63, 329.63, 440.0], arp: [523.25, 659.25, 880.0, 659.25] }, // Am
+  { bass: 174.61, chord: [261.63, 349.23, 440.0], arp: [523.25, 698.46, 880.0, 698.46] }, // F
+];
+
+/** A short plucked note (triangle for the melody, sine for warmth). */
+function pluck(
+  ctx: AudioContext,
+  dest: AudioNode,
+  freq: number,
+  at: number,
+  dur: number,
+  peak: number,
+  type: OscillatorType,
+): void {
+  const osc = ctx.createOscillator();
+  osc.type = type;
+  osc.frequency.setValueAtTime(freq, at);
+  const g = ctx.createGain();
+  g.gain.setValueAtTime(0.0001, at);
+  g.gain.exponentialRampToValueAtTime(peak, at + 0.012);
+  g.gain.exponentialRampToValueAtTime(0.0001, at + dur);
+  osc.connect(g).connect(dest);
+  osc.start(at);
+  osc.stop(at + dur + 0.03);
+}
+
+/** Boost SFX above the bed, and start the upbeat sequenced music. Idempotent. */
 export function startMusic(): void {
   if (started) return;
   const ctx = getAudioContext();
@@ -28,70 +60,86 @@ export function startMusic(): void {
   started = true;
   setSfxBoost(1.9);
 
-  bedGain = ctx.createGain();
-  bedGain.gain.value = 0.0001;
-  bedGain.connect(ctx.destination);
-  // Gentle fade-in of the bed.
-  bedGain.gain.exponentialRampToValueAtTime(0.06, ctx.currentTime + 1.4);
+  musicGain = ctx.createGain();
+  musicGain.gain.value = 0.0001;
+  musicGain.connect(ctx.destination);
+  // Quick, cheerful fade-in.
+  musicGain.gain.exponentialRampToValueAtTime(0.11, ctx.currentTime + 0.8);
 
-  const build = (freqs: number[]) => {
-    for (const f of freqs) {
-      const osc = ctx.createOscillator();
-      osc.type = 'sine';
-      osc.frequency.value = f;
-      const g = ctx.createGain();
-      g.gain.value = 1 / freqs.length;
-      // Slow tremolo so the pad breathes rather than sitting static.
-      const lfo = ctx.createOscillator();
-      lfo.frequency.value = 0.12 + Math.random() * 0.1;
-      const lfoGain = ctx.createGain();
-      lfoGain.gain.value = 0.18;
-      lfo.connect(lfoGain).connect(g.gain);
-      osc.connect(g).connect(bedGain!);
-      osc.start();
-      lfo.start();
-      bedNodes.push({ osc, lfo, gain: g });
+  // A quiet sustained pad (the three chord voices) that we retune each bar, so
+  // there's a warm harmonic floor under the plucks.
+  const padBus = ctx.createGain();
+  padBus.gain.value = 0.22;
+  padBus.connect(musicGain);
+  for (let v = 0; v < 3; v++) {
+    const osc = ctx.createOscillator();
+    osc.type = 'sine';
+    osc.frequency.value = PROG[0].chord[v];
+    osc.connect(padBus);
+    osc.start();
+    padOscs.push(osc);
+  }
+
+  const arpBus = ctx.createGain();
+  arpBus.gain.value = 0.5;
+  arpBus.connect(musicGain);
+  const bassBus = ctx.createGain();
+  bassBus.gain.value = 0.6;
+  bassBus.connect(musicGain);
+
+  // Schedule ~2 bars ahead on a rolling timer so the loop never gaps.
+  let bar = 0;
+  let nextTime = ctx.currentTime + 0.15;
+  const scheduleAhead = () => {
+    if (!started) return;
+    while (nextTime < ctx.currentTime + 2 * BAR) {
+      const step = PROG[bar % PROG.length];
+      // Retune the pad to this bar's chord.
+      padOscs.forEach((osc, v) => {
+        osc.frequency.linearRampToValueAtTime(step.chord[v], nextTime + 0.05);
+      });
+      // Bass on the downbeat, plus a bounce on beat 3.
+      pluck(ctx, bassBus, step.bass, nextTime, 0.5, 0.5, 'sine');
+      pluck(ctx, bassBus, step.bass, nextTime + BEAT * 2, 0.4, 0.4, 'sine');
+      // Arpeggio: one note per eighth across the bar for a lively, hopeful run.
+      for (let i = 0; i < 8; i++) {
+        const note = step.arp[i % step.arp.length];
+        pluck(ctx, arpBus, note, nextTime + i * (BEAT / 2), 0.26, 0.32, 'triangle');
+      }
+      nextTime += BAR;
+      bar++;
     }
   };
-  build(CHORD_A);
-
-  // Crossfade between the two chords on a loop by retuning the oscillators.
-  let toB = true;
-  const swing = () => {
-    if (!started) return;
-    const now = ctx.currentTime;
-    const target = toB ? CHORD_B : CHORD_A;
-    bedNodes.forEach((n, i) => {
-      n.osc.frequency.linearRampToValueAtTime(target[i % target.length], now + 1.6);
-    });
-    toB = !toB;
-  };
-  window.setInterval(swing, CHORD_LEN * 1000);
+  scheduleAhead();
+  seqTimer = window.setInterval(scheduleAhead, (BAR * 1000) / 2);
 }
 
-/** Fade the bed out and free the oscillators. */
+/** Fade the music out and free the oscillators. */
 export function stopMusic(): void {
   const ctx = getAudioContext();
-  if (bedGain && ctx) {
-    bedGain.gain.cancelScheduledValues(ctx.currentTime);
-    bedGain.gain.setValueAtTime(bedGain.gain.value, ctx.currentTime);
-    bedGain.gain.exponentialRampToValueAtTime(0.0001, ctx.currentTime + 0.8);
+  if (seqTimer !== null) {
+    window.clearInterval(seqTimer);
+    seqTimer = null;
+  }
+  if (musicGain && ctx) {
+    musicGain.gain.cancelScheduledValues(ctx.currentTime);
+    musicGain.gain.setValueAtTime(musicGain.gain.value, ctx.currentTime);
+    musicGain.gain.exponentialRampToValueAtTime(0.0001, ctx.currentTime + 0.6);
   }
   const kill = () => {
-    for (const n of bedNodes) {
+    for (const osc of padOscs) {
       try {
-        n.osc.stop();
-        n.lfo.stop();
+        osc.stop();
       } catch {
         /* already stopped */
       }
     }
-    bedNodes = [];
-    bedGain = null;
+    padOscs = [];
+    musicGain = null;
     started = false;
     setSfxBoost(1);
   };
-  window.setTimeout(kill, 900);
+  window.setTimeout(kill, 700);
 }
 
 /** Fire one of the app's real SFX. */
