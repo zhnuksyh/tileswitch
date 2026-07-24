@@ -145,6 +145,15 @@ export class Board {
 
   /** Shuffle the pieces across slots and hand control to the player. */
   private scramble(): void {
+    const { cellSize } = this.puzzle;
+
+    // Remember where each piece sits now (its solved cell) so we can animate
+    // it travelling to wherever it lands after the shuffle.
+    const fromCell = new Map<number, { row: number; col: number }>();
+    for (const slot of this.slots) {
+      fromCell.set(slot.piece.id, { row: slot.row, col: slot.col });
+    }
+
     const order = this.slots.map((s) => s.piece);
     do {
       for (let i = order.length - 1; i > 0; i--) {
@@ -158,8 +167,8 @@ export class Board {
       slot.piece = order[i];
       slot.locked = false;
       slot.el.className = LOOSE_CLASS;
-      slot.el.style.width = `${this.puzzle.cellSize}px`;
-      slot.el.style.height = `${this.puzzle.cellSize}px`;
+      slot.el.style.width = `${cellSize}px`;
+      slot.el.style.height = `${cellSize}px`;
       paintTile(slot.el, this.puzzle, slot.piece);
     }
 
@@ -169,30 +178,48 @@ export class Board {
     }
 
     this.paintSlots();
-    this.playShuffleBurst();
+    this.playScramble(fromCell);
     play('swap');
     this.cb.onProgress(this.lockedCount(), this.total);
     this.cb.onReady?.();
   }
 
-  /** Quick scatter animation as the solved image breaks into shuffled tiles. */
-  private playShuffleBurst(): void {
+  /**
+   * FLIP travel: every tile now shows a piece that belonged to some other cell.
+   * Animate each from that origin cell to its new home so the solved picture
+   * visibly flies apart into the shuffled layout. Distance drives a subtle
+   * stagger + lift so far-travelling tiles read as sweeping across the board.
+   */
+  private playScramble(fromCell: Map<number, { row: number; col: number }>): void {
     if (prefersReducedMotion()) return;
+    const { cellSize } = this.puzzle;
     for (const slot of this.slots) {
-      const jx = (Math.random() - 0.5) * 26;
-      const jy = (Math.random() - 0.5) * 26;
-      const rot = (Math.random() - 0.5) * 10;
+      const from = fromCell.get(slot.piece.id);
+      if (!from) continue;
+      const dx = (from.col - slot.col) * cellSize;
+      const dy = (from.row - slot.row) * cellSize;
+      const dist = Math.hypot(dx, dy);
+      if (dist === 0) continue;
+      // Farther tiles start a touch later and lift a bit more mid-flight.
+      const delay = Math.min(160, dist * 0.35);
       slot.el.animate(
         [
-          { transform: `translate(${jx}px, ${jy}px) rotate(${rot}deg) scale(0.9)`, offset: 0 },
-          { transform: 'translate(0,0) rotate(0) scale(1)', offset: 1 },
+          { transform: `translate(${dx}px, ${dy}px) scale(0.94)`, offset: 0, easing: 'cubic-bezier(0.4, 0, 0.2, 1)' },
+          { transform: `translate(${dx * 0.4}px, ${dy * 0.4}px) scale(1.06)`, offset: 0.55 },
+          { transform: 'translate(0, 0) scale(1)', offset: 1 },
         ],
-        { duration: 360, easing: 'cubic-bezier(0.22, 1, 0.36, 1)' },
+        {
+          duration: 520,
+          delay,
+          easing: 'cubic-bezier(0.22, 1, 0.36, 1)',
+          fill: 'backwards',
+        },
       );
     }
   }
 
-  get moveCount(): number {
+  /** Moves made so far — 0 means the player hasn't touched the puzzle yet. */
+  get progress(): number {
     return this.moves;
   }
 
@@ -246,17 +273,38 @@ export class Board {
       ],
       { duration: 360, easing: 'cubic-bezier(0.34, 1.56, 0.64, 1)' },
     );
-    // A bright flash that fades as it becomes "part of the image".
+
+    // Confirmation ring: a bright outline that grows from the centre outward to
+    // the tile edge, then fades — a "sealed into place" beat.
+    const ring = document.createElement('div');
+    ring.className = 'absolute inset-0 pointer-events-none rounded-md';
+    ring.style.boxShadow =
+      'inset 0 0 0 3px rgba(56,189,248,0.9), 0 0 14px 2px rgba(56,189,248,0.55)';
+    ring.style.zIndex = '5';
+    slot.el.appendChild(ring);
+    const ringAnim = animate(
+      ring,
+      [
+        { opacity: 0, transform: 'scale(0.2)', offset: 0 },
+        { opacity: 1, transform: 'scale(0.75)', offset: 0.45 },
+        { opacity: 0, transform: 'scale(1)', offset: 1 },
+      ],
+      { duration: 560, easing: 'cubic-bezier(0.22, 1, 0.36, 1)' },
+    );
+    if (ringAnim) ringAnim.onfinish = () => ring.remove();
+    else ring.remove();
+
+    // A soft glow that blooms from the centre and fades as it becomes image.
     const flash = document.createElement('div');
     flash.className = 'absolute inset-0 pointer-events-none';
     flash.style.background =
-      'radial-gradient(circle, rgba(255,255,255,0.55), rgba(56,189,248,0.35) 55%, transparent 75%)';
+      'radial-gradient(circle, rgba(255,255,255,0.5), rgba(56,189,248,0.3) 55%, transparent 75%)';
     slot.el.appendChild(flash);
     const anim = animate(
       flash,
       [
-        { opacity: 0.9, transform: 'scale(0.6)' },
-        { opacity: 0, transform: 'scale(1.25)' },
+        { opacity: 0.85, transform: 'scale(0.4)' },
+        { opacity: 0, transform: 'scale(1.2)' },
       ],
       { duration: 500, easing: 'ease-out' },
     );
@@ -336,15 +384,31 @@ export class Board {
     if (!this.selected) {
       this.selected = source;
       play('select');
+      this.nudge(source);
     } else if (this.selected === source) {
       this.selected = null;
       play('select');
+      this.nudge(source);
     } else {
       this.swap(this.selected, source);
       this.selected = null;
     }
     this.paintSlots();
   };
+
+  /** Small springy bob when a tile is tapped, for tactile feedback. */
+  private nudge(slot: Slot): void {
+    if (prefersReducedMotion()) return;
+    slot.el.animate(
+      [
+        { transform: 'scale(1)' },
+        { transform: 'scale(1.09)' },
+        { transform: 'scale(0.98)' },
+        { transform: 'scale(1)' },
+      ],
+      { duration: 260, easing: 'cubic-bezier(0.34, 1.56, 0.64, 1)' },
+    );
+  }
 
   private slotAtPoint(x: number, y: number): Slot | null {
     const rect = this.gridEl.getBoundingClientRect();
@@ -435,7 +499,9 @@ export class Board {
 
   /**
    * Briefly reveal the fully solved image over the current board (the "peek"
-   * hint). The overlay fades in, holds, and fades out.
+   * hint). The overlay scales/fades in from the centre, holds, then scales
+   * back out — and the loose tiles give a gentle wave underneath so the board
+   * feels like it breathes into the solution and back.
    */
   peek(durationMs = 1400): void {
     if (this.gridEl.querySelector('[data-peek]')) return;
@@ -447,24 +513,59 @@ export class Board {
     layer.style.backgroundSize = `${boardWidth}px ${boardHeight}px`;
     layer.style.backgroundPosition = '0 0';
     layer.style.zIndex = '40';
+    layer.style.transformOrigin = 'center';
     this.gridEl.appendChild(layer);
 
-    const fadeIn = layer.animate(
-      [{ opacity: 0 }, { opacity: 1 }],
-      { duration: 220, easing: 'ease-out', fill: 'forwards' },
-    );
-    const remove = () => {
-      layer
-        .animate([{ opacity: 1 }, { opacity: 0 }], {
-          duration: 300,
-          easing: 'ease-in',
-        })
-        .addEventListener('finish', () => layer.remove());
-    };
     if (prefersReducedMotion()) {
       layer.style.opacity = '1';
-      fadeIn.cancel();
+      window.setTimeout(() => layer.remove(), durationMs);
+      return;
     }
+
+    // Wave the loose tiles as the solution appears, from the centre outward.
+    const midRow = (this.puzzle.grid.rows - 1) / 2;
+    const midCol = (this.puzzle.grid.cols - 1) / 2;
+    const waveTiles = (settleIn: boolean) => {
+      for (const slot of this.slots) {
+        if (slot.locked) continue;
+        const d = Math.hypot(slot.row - midRow, slot.col - midCol);
+        slot.el.animate(
+          settleIn
+            ? [{ transform: 'scale(1)' }, { transform: 'scale(0.9)' }]
+            : [{ transform: 'scale(0.9)' }, { transform: 'scale(1)' }],
+          {
+            duration: 300,
+            delay: d * 22,
+            easing: 'ease-out',
+            // Hold the shrunk state only while the overlay is up; the out-wave
+            // returns to the inline scale(1) without a lingering fill.
+            fill: settleIn ? 'forwards' : 'none',
+          },
+        );
+      }
+    };
+
+    layer.animate(
+      [
+        { opacity: 0, transform: 'scale(1.06)' },
+        { opacity: 1, transform: 'scale(1)' },
+      ],
+      { duration: 300, easing: 'cubic-bezier(0.22, 1, 0.36, 1)', fill: 'forwards' },
+    );
+    waveTiles(true);
+
+    const remove = () => {
+      layer
+        .animate(
+          [
+            { opacity: 1, transform: 'scale(1)' },
+            { opacity: 0, transform: 'scale(1.06)' },
+          ],
+          { duration: 320, easing: 'cubic-bezier(0.4, 0, 1, 1)', fill: 'forwards' },
+        )
+        .addEventListener('finish', () => layer.remove());
+      waveTiles(false);
+    };
     window.setTimeout(remove, durationMs);
   }
 
