@@ -1,6 +1,6 @@
 import { icon, icons } from './icons';
 import { getLibrary, type LibraryImage } from '../library/manifest';
-import { addUpload, removeUpload } from '../library/uploads';
+import { addUploads, removeUpload } from '../library/uploads';
 import { nextImage, markSeen } from '../library/rotation';
 import { play } from '../audio/sfx';
 import { animate } from './motion';
@@ -187,24 +187,19 @@ export function renderSetup(
     const accepted = files.slice(0, room);
     const rejected = files.length - accepted.length;
 
-    let firstAdded: LibraryImage | null = null;
-    let failed = 0;
-    for (const file of accepted) {
-      try {
-        const up = await addUpload(file);
-        if (!firstAdded) {
-          firstAdded = { id: up.id, title: up.title, src: up.url, source: 'uploaded' };
-        }
-      } catch (err) {
-        failed++;
-        console.warn('Skipped a file:', err);
-      }
-    }
+    // Loading screen while images are encoded to WebP and stored.
+    const loader = showLoading(container, accepted.length);
+    const { added, failed } = await addUploads(accepted, loader.update);
+    loader.close();
+
     await refreshLibrary();
-    if (firstAdded) selectImage(firstAdded);
-    if (rejected > 0) {
-      showLimitDialog(container, uploadCount(), accepted.length - failed, rejected);
+    if (added[0]) {
+      selectImage({ id: added[0].id, title: added[0].title, src: added[0].url, source: 'uploaded' });
     }
+    if (rejected > 0) {
+      showLimitDialog(container, uploadCount(), added.length, rejected);
+    }
+    void failed;
   });
   card.appendChild(addZone);
 
@@ -468,4 +463,61 @@ function showLimitDialog(
     ],
     { duration: 220, easing: 'cubic-bezier(0.22, 1, 0.36, 1)' },
   );
+}
+
+// Full-screen loading overlay shown while uploads are encoded and stored.
+// Returns an updater (done, total) for live progress and a close().
+function showLoading(
+  host: HTMLElement,
+  total: number,
+): { update: (done: number, total: number) => void; close: () => void } {
+  const overlay = document.createElement('div');
+  overlay.className =
+    'fixed inset-0 z-50 flex items-center justify-center p-6 bg-black/70 backdrop-blur-sm';
+
+  const cardEl = document.createElement('div');
+  cardEl.className =
+    'flex flex-col items-center gap-4 p-8 rounded-3xl bg-base-800 ring-1 ring-base-700 w-full max-w-sm text-center shadow-2xl';
+
+  // Spinner.
+  const spinner = document.createElement('div');
+  spinner.className =
+    'w-10 h-10 rounded-full border-4 border-base-600 border-t-accent animate-spin';
+  cardEl.appendChild(spinner);
+
+  const title = document.createElement('h2');
+  title.className = 'text-lg font-semibold';
+  title.textContent =
+    total === 1 ? 'Making your image puzzle-ready…' : 'Making your images puzzle-ready…';
+  cardEl.appendChild(title);
+
+  const count = document.createElement('p');
+  count.className = 'text-sm text-slate-400 tabular-nums';
+  count.textContent = `0 / ${total}`;
+  cardEl.appendChild(count);
+
+  // Progress bar.
+  const track = document.createElement('div');
+  track.className = 'w-full h-2 rounded-full bg-base-700 overflow-hidden';
+  const fill = document.createElement('div');
+  fill.className = 'h-full bg-accent transition-[width] duration-200 ease-out';
+  fill.style.width = '0%';
+  track.appendChild(fill);
+  cardEl.appendChild(track);
+
+  overlay.appendChild(cardEl);
+  host.appendChild(overlay);
+  animate(overlay, [{ opacity: 0 }, { opacity: 1 }], { duration: 160 });
+
+  return {
+    update: (done, t) => {
+      count.textContent = `${done} / ${t}`;
+      fill.style.width = `${Math.round((done / t) * 100)}%`;
+    },
+    close: () => {
+      const anim = animate(overlay, [{ opacity: 1 }, { opacity: 0 }], { duration: 160 });
+      if (anim) anim.finished.then(() => overlay.remove());
+      else overlay.remove();
+    },
+  };
 }

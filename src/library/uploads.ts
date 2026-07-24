@@ -76,6 +76,48 @@ export async function addUpload(file: File): Promise<UploadedImage> {
   return toUploaded(entry);
 }
 
+export interface BatchResult {
+  added: UploadedImage[];
+  failed: number;
+}
+
+/**
+ * Add many files, encoding up to `concurrency` at once so a batch finishes far
+ * faster than strictly one-by-one. `onProgress(done, total)` fires as each file
+ * settles, for a live indicator. Results preserve input order.
+ */
+export async function addUploads(
+  files: File[],
+  onProgress?: (done: number, total: number) => void,
+  concurrency = 3,
+): Promise<BatchResult> {
+  const total = files.length;
+  const results: (UploadedImage | null)[] = new Array(total).fill(null);
+  let done = 0;
+  let next = 0;
+
+  const worker = async () => {
+    for (;;) {
+      const i = next++;
+      if (i >= total) return;
+      try {
+        results[i] = await addUpload(files[i]);
+      } catch (err) {
+        console.warn('Skipped a file:', err);
+      }
+      done++;
+      onProgress?.(done, total);
+    }
+  };
+
+  await Promise.all(
+    Array.from({ length: Math.min(concurrency, total) }, worker),
+  );
+
+  const added = results.filter((r): r is UploadedImage => r !== null);
+  return { added, failed: total - added.length };
+}
+
 /** Remove an uploaded image by id. */
 export async function removeUpload(id: string): Promise<void> {
   await deleteUpload(id);
