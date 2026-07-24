@@ -52,6 +52,10 @@ export class Board {
   private solved = false;
   private started = false;
   private moves = 0;
+  /** Reveal "breathe" animations, cancelled before the scramble travel runs. */
+  private revealAnims: Animation[] = [];
+  /** True while a peek overlay is showing, to block overlapping peeks. */
+  private peeking = false;
 
   // Drag state (drag-to-swap).
   private dragging: Slot | null = null;
@@ -134,18 +138,25 @@ export class Board {
       return;
     }
     // Gentle "breathe" on the finished image so the reveal reads as intentional.
-    for (const slot of this.slots) {
+    // Ends a hair before the scramble so it can't overlap the travel animation.
+    const breatheMs = Math.max(0, revealMs - 60);
+    this.revealAnims = this.slots.map((slot) =>
       slot.el.animate(
         [{ transform: 'scale(1)' }, { transform: 'scale(1.015)' }, { transform: 'scale(1)' }],
-        { duration: revealMs, easing: 'ease-in-out' },
-      );
-    }
+        { duration: breatheMs, easing: 'ease-in-out' },
+      ),
+    );
     window.setTimeout(scramble, revealMs);
   }
 
   /** Shuffle the pieces across slots and hand control to the player. */
   private scramble(): void {
     const { cellSize } = this.puzzle;
+
+    // Stop the reveal breathe so it can't fight the travel animation below
+    // (overlapping transforms on the same element are what made it stutter).
+    for (const anim of this.revealAnims) anim.cancel();
+    this.revealAnims = [];
 
     // Remember where each piece sits now (its solved cell) so we can animate
     // it travelling to wherever it lands after the shuffle.
@@ -200,21 +211,26 @@ export class Board {
       const dy = (from.row - slot.row) * cellSize;
       const dist = Math.hypot(dx, dy);
       if (dist === 0) continue;
-      // Farther tiles start a touch later and lift a bit more mid-flight.
-      const delay = Math.min(160, dist * 0.35);
-      slot.el.animate(
+      // Farther tiles start a touch later, for a sweeping cascade.
+      const delay = Math.min(140, dist * 0.28);
+      // Lift moving tiles above their neighbours so they glide cleanly over,
+      // then drop back to the base stacking once settled.
+      slot.el.style.zIndex = '20';
+      const anim = slot.el.animate(
         [
-          { transform: `translate(${dx}px, ${dy}px) scale(0.94)`, offset: 0, easing: 'cubic-bezier(0.4, 0, 0.2, 1)' },
-          { transform: `translate(${dx * 0.4}px, ${dy * 0.4}px) scale(1.06)`, offset: 0.55 },
-          { transform: 'translate(0, 0) scale(1)', offset: 1 },
+          { transform: `translate(${dx}px, ${dy}px)` },
+          { transform: 'translate(0, 0)' },
         ],
         {
-          duration: 520,
+          duration: 460,
           delay,
           easing: 'cubic-bezier(0.22, 1, 0.36, 1)',
           fill: 'backwards',
         },
       );
+      anim.onfinish = () => {
+        if (!slot.locked) slot.el.style.zIndex = '1';
+      };
     }
   }
 
@@ -504,7 +520,10 @@ export class Board {
    * feels like it breathes into the solution and back.
    */
   peek(durationMs = 1400): void {
-    if (this.gridEl.querySelector('[data-peek]')) return;
+    // Guard against overlapping peeks (which caused stuck-shrunk tiles before).
+    if (this.peeking) return;
+    this.peeking = true;
+
     const { boardWidth, boardHeight, image } = this.puzzle;
     const layer = document.createElement('div');
     layer.dataset.peek = '1';
@@ -516,31 +535,28 @@ export class Board {
     layer.style.transformOrigin = 'center';
     this.gridEl.appendChild(layer);
 
+    const done = () => {
+      layer.remove();
+      this.peeking = false;
+    };
+
     if (prefersReducedMotion()) {
       layer.style.opacity = '1';
-      window.setTimeout(() => layer.remove(), durationMs);
+      window.setTimeout(done, durationMs);
       return;
     }
 
-    // Wave the loose tiles as the solution appears, from the centre outward.
+    // The tile wave uses transient animations only (no fill) so nothing stays
+    // stuck if a tile locks or is tapped mid-peek — the elements always return
+    // to their own inline transform on their own.
     const midRow = (this.puzzle.grid.rows - 1) / 2;
     const midCol = (this.puzzle.grid.cols - 1) / 2;
-    const waveTiles = (settleIn: boolean) => {
+    const waveTiles = (to: number) => {
       for (const slot of this.slots) {
-        if (slot.locked) continue;
         const d = Math.hypot(slot.row - midRow, slot.col - midCol);
         slot.el.animate(
-          settleIn
-            ? [{ transform: 'scale(1)' }, { transform: 'scale(0.9)' }]
-            : [{ transform: 'scale(0.9)' }, { transform: 'scale(1)' }],
-          {
-            duration: 300,
-            delay: d * 22,
-            easing: 'ease-out',
-            // Hold the shrunk state only while the overlay is up; the out-wave
-            // returns to the inline scale(1) without a lingering fill.
-            fill: settleIn ? 'forwards' : 'none',
-          },
+          [{ transform: `scale(${to === 1 ? 0.9 : 1})` }, { transform: `scale(${to})` }],
+          { duration: 300, delay: d * 20, easing: 'ease-out' },
         );
       }
     };
@@ -552,21 +568,21 @@ export class Board {
       ],
       { duration: 300, easing: 'cubic-bezier(0.22, 1, 0.36, 1)', fill: 'forwards' },
     );
-    waveTiles(true);
+    waveTiles(0.9);
 
-    const remove = () => {
-      layer
-        .animate(
-          [
-            { opacity: 1, transform: 'scale(1)' },
-            { opacity: 0, transform: 'scale(1.06)' },
-          ],
-          { duration: 320, easing: 'cubic-bezier(0.4, 0, 1, 1)', fill: 'forwards' },
-        )
-        .addEventListener('finish', () => layer.remove());
-      waveTiles(false);
-    };
-    window.setTimeout(remove, durationMs);
+    window.setTimeout(() => {
+      const out = layer.animate(
+        [
+          { opacity: 1, transform: 'scale(1)' },
+          { opacity: 0, transform: 'scale(1.06)' },
+        ],
+        { duration: 320, easing: 'cubic-bezier(0.4, 0, 1, 1)', fill: 'forwards' },
+      );
+      out.addEventListener('finish', done);
+      // Safety: if the finish event is missed, still clean up.
+      window.setTimeout(done, 400);
+      waveTiles(1);
+    }, durationMs);
   }
 
   destroy(): void {

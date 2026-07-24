@@ -6,13 +6,27 @@ import { animate } from './motion';
 import { burstConfetti } from './confetti';
 import { loadSettings } from '../game/settings';
 import { computeScore, recordSolve, breakStreak, loadStats } from '../game/stats';
+import { getNote, setNote, NOTE_MAX_LEN } from '../library/notes';
+import { recordSolved } from '../library/history';
+import type { LibraryImage } from '../library/manifest';
 
 // Hosts a running puzzle: header with progress + controls, the board itself,
 // and a win overlay. Chooses a cell size that fits the viewport.
 
+export interface GameContext {
+  /** The library entry being played (for notes and the next-puzzle rotation). */
+  entry: LibraryImage;
+  /** The library pool to rotate through on 'Next puzzle'. */
+  library: LibraryImage[];
+  /** Difficulty label, recorded in history on solve. */
+  difficultyLabel: string;
+}
+
 export interface GameCallbacks {
   onExit: () => void;
   onRestart: () => void;
+  /** Advance to the next non-repeated library image at the same difficulty. */
+  onNext: () => void;
 }
 
 /** mm:ss from milliseconds. */
@@ -99,6 +113,7 @@ export function renderGame(
   image: HTMLImageElement,
   baseTiles: number,
   cb: GameCallbacks,
+  ctx: GameContext,
 ): void {
   root.innerHTML = '';
 
@@ -129,12 +144,25 @@ export function renderGame(
   const safeCell = Math.max(MIN_CELL, fitCell);
 
   const container = document.createElement('div');
-  container.className = 'min-h-screen w-full flex flex-col';
+  container.className = 'min-h-screen w-full flex flex-col items-center';
+
+  // Board dimensions drive the header width: the controls' outer edges line up
+  // with the board's left/right edges rather than the full viewport, pulling
+  // them toward centre over the puzzle. We reference a 16:9 width so narrow
+  // (portrait) puzzles still get a comfortable, not-too-cramped control bar.
+  const boardW = grid.cols * safeCell;
+  const ref169 = Math.round((maxBoardH * 16) / 9);
+  const headerMax = Math.min(
+    Math.max(boardW, Math.min(ref169, maxBoardW)),
+    maxBoardW,
+  );
 
   // Header. Menu sits alone on the left; everything else (stats + controls)
-  // groups on the right. No divider under it.
+  // groups on the right. No divider under it. Width matches the board so the
+  // controls sit at its edges.
   const header = document.createElement('header');
-  header.className = 'flex items-center justify-between gap-4 px-5 py-4';
+  header.className = 'flex items-center justify-between gap-4 px-1 w-full';
+  header.style.maxWidth = `${headerMax}px`;
 
   const backBtn = document.createElement('button');
   backBtn.className =
@@ -148,10 +176,12 @@ export function renderGame(
   const rightControls = document.createElement('div');
   rightControls.className = 'flex items-center gap-2';
 
-  // Progress chip (always shown).
+  // Progress chip (always shown): grid icon + "placed / total".
   const progressChip = document.createElement('div');
   progressChip.className =
     'flex items-center gap-1.5 px-2.5 py-1 rounded-full bg-base-800 text-sm font-medium tabular-nums text-slate-200';
+  progressChip.appendChild(icon(icons.progress, 'w-3.5 h-3.5 text-slate-400'));
+  progressChip.title = 'Tiles placed correctly';
   const progress = document.createElement('span');
   progressChip.appendChild(progress);
   rightControls.appendChild(progressChip);
@@ -237,17 +267,17 @@ export function renderGame(
 
   header.appendChild(rightControls);
 
-  container.appendChild(header);
+  // Stage: header + board grouped and centred together, so the controls sit
+  // just above the puzzle rather than pinned to the top of the screen. Scrolls
+  // as one unit when a fine grid is taller than the viewport.
+  const stage = document.createElement('div');
+  stage.className =
+    'flex-1 w-full flex flex-col items-center justify-center gap-1.5 overflow-auto p-4';
+  stage.appendChild(header);
 
-  // Board area. Scrolls when a fine grid is larger than the viewport; the
-  // inner wrapper uses margin:auto so the board stays centred when it fits but
-  // pins to the top-left (not clipped) when it overflows.
-  const boardArea = document.createElement('div');
-  boardArea.className = 'flex-1 flex overflow-auto';
   const boardCenter = document.createElement('div');
-  boardCenter.className = 'm-auto p-4';
-  boardArea.appendChild(boardCenter);
-  container.appendChild(boardArea);
+  stage.appendChild(boardCenter);
+  container.appendChild(stage);
 
   root.appendChild(container);
 
@@ -285,6 +315,8 @@ export function renderGame(
         { score, timeMs: elapsedMs, tiles: total, moves },
         settings.streak,
       );
+      // Stamp this image's history entry with the solve time + difficulty.
+      recordSolved(ctx.entry.id, elapsedMs, ctx.difficultyLabel);
       showWin(root, board, cb, {
         settings,
         timeMs: elapsedMs,
@@ -293,6 +325,8 @@ export function renderGame(
         stats,
         newBestScore,
         newBestTime,
+        entry: ctx.entry,
+        canAdvance: ctx.library.length > 1,
       });
     },
   });
@@ -337,6 +371,10 @@ interface WinInfo {
   stats: ReturnType<typeof loadStats>;
   newBestScore: boolean;
   newBestTime: boolean;
+  /** The image just solved, for the note field. */
+  entry: LibraryImage;
+  /** Whether a next-puzzle image is available to advance to. */
+  canAdvance: boolean;
 }
 
 function showWin(
@@ -414,6 +452,26 @@ function showWin(
     modal.appendChild(statRow);
   }
 
+  // Optional note for this image — saved live as you type, read later in
+  // History. One note per image (re-solving edits the same note).
+  const noteWrap = document.createElement('div');
+  noteWrap.className = 'w-full flex flex-col gap-1.5 mt-1 text-left';
+  const noteLabel = document.createElement('label');
+  noteLabel.className = 'flex items-center gap-1.5 text-xs font-medium text-slate-400';
+  noteLabel.appendChild(icon(icons.note, 'w-3.5 h-3.5'));
+  noteLabel.appendChild(document.createTextNode('Add a note (saved to this image)'));
+  noteWrap.appendChild(noteLabel);
+  const noteInput = document.createElement('textarea');
+  noteInput.className =
+    'w-full resize-none rounded-2xl bg-base-900/70 ring-1 ring-base-700 focus:ring-accent outline-none px-4 py-3 text-sm placeholder:text-slate-600 transition-shadow';
+  noteInput.rows = 2;
+  noteInput.maxLength = NOTE_MAX_LEN;
+  noteInput.placeholder = 'How was this one? A memory, a caption…';
+  noteInput.value = getNote(info.entry.id);
+  noteInput.addEventListener('input', () => setNote(info.entry.id, noteInput.value));
+  noteWrap.appendChild(noteInput);
+  modal.appendChild(noteWrap);
+
   // Confetti fires on show; kept so we can stop it if we leave early.
   const stopConfetti = burstConfetti();
 
@@ -457,7 +515,7 @@ function showWin(
 
   const again = document.createElement('button');
   again.className =
-    'flex items-center gap-2 px-6 py-2.5 rounded-full bg-accent hover:bg-accent-hover text-base-900 font-semibold transition-colors';
+    'flex items-center gap-2 px-6 py-2.5 rounded-full bg-base-700 hover:bg-base-600 transition-colors font-medium';
   again.appendChild(icon(icons.restart, 'w-4 h-4'));
   again.appendChild(document.createTextNode('Play again'));
   again.addEventListener('click', () => {
@@ -468,6 +526,24 @@ function showWin(
     cb.onRestart();
   });
   row.appendChild(again);
+
+  // Next puzzle: rotate to the next non-repeated library image, same
+  // difficulty. Primary action when there's more than one image to rotate.
+  if (info.canAdvance) {
+    const next = document.createElement('button');
+    next.className =
+      'flex items-center gap-2 px-6 py-2.5 rounded-full bg-accent hover:bg-accent-hover text-base-900 font-semibold transition-colors';
+    next.appendChild(document.createTextNode('Next puzzle'));
+    next.appendChild(icon(icons.next, 'w-4 h-4'));
+    next.addEventListener('click', () => {
+      stopConfetti();
+      overlay.remove();
+      backPill.remove();
+      board.destroy();
+      cb.onNext();
+    });
+    row.appendChild(next);
+  }
 
   const menu = document.createElement('button');
   menu.className =
