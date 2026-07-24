@@ -16,6 +16,10 @@ import {
   Star,
   SlidersHorizontal,
   X,
+  LayoutGrid,
+  Share2,
+  StickyNote,
+  ArrowRight,
   type IconNode,
 } from 'lucide';
 
@@ -46,4 +50,8 @@ export const icons = {
   score: Star,
   settings: SlidersHorizontal,
   close: X,
+  progress: LayoutGrid,
+  share: Share2,
+  note: StickyNote,
+  next: ArrowRight,
 };
