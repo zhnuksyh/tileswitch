@@ -29,15 +29,15 @@ function asset(path: string): string {
 }
 
 // --- Source 1: public placeholders (starter set) ---------------------------
-// Six bundled library PNGs — the placeholder grid shown while the user has no
-// uploads of their own, so the setup screen is never empty.
+// Five bundled illustrations — the placeholder grid shown while the user has no
+// uploads of their own, so the setup screen is never empty. Five (not six) so
+// the grid's sixth cell is free for the "add image" tile.
 const PUBLIC_FILES: { file: string; title: string }[] = [
-  { file: 'anime/spirited-away.png', title: 'Spirited Away' },
-  { file: 'anime/your-name.png', title: 'Your Name' },
-  { file: 'cartoon/spongebob.png', title: 'SpongeBob' },
-  { file: 'cartoon/adventure-time.png', title: 'Adventure Time' },
-  { file: 'vector/mountain-sunrise.png', title: 'Mountain Sunrise' },
-  { file: 'vector/tropical-beach.png', title: 'Tropical Beach' },
+  { file: 'placeholders/cosmic-vortex.jpg', title: 'Cosmic Vortex' },
+  { file: 'placeholders/astronauts-at-sunset.jpg', title: 'Astronauts at Sunset' },
+  { file: 'placeholders/planets-and-stars.jpg', title: 'Planets & Stars' },
+  { file: 'placeholders/moonlit-castle.jpg', title: 'Moonlit Castle' },
+  { file: 'placeholders/jungle-treehouse.jpg', title: 'Jungle Treehouse' },
 ];
 
 const publicImages: LibraryImage[] = PUBLIC_FILES.map(({ file, title }) => ({
