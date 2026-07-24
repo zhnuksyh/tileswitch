@@ -726,7 +726,9 @@ function showAllImages(
   cardEl.appendChild(hint);
 
   const scroll = document.createElement('div');
-  scroll.className = 'overflow-y-auto -mx-1 px-1 no-scrollbar';
+  // Negative margins + matching padding give hovered tiles room to lift/scale
+  // without the scroll container clipping their top edge.
+  scroll.className = 'overflow-y-auto -m-1 p-1 no-scrollbar';
   const modalGrid = document.createElement('div');
   modalGrid.className = 'grid grid-cols-3 sm:grid-cols-5 gap-3';
 
@@ -1031,7 +1033,9 @@ function showHistoryModal(
   cardEl.appendChild(head);
 
   const scroll = document.createElement('div');
-  scroll.className = 'overflow-y-auto -mr-2 pr-2';
+  // Negative margins + matching padding give hovered tiles room to lift/scale
+  // without the scroll container clipping their top edge.
+  scroll.className = 'overflow-y-auto -m-2 p-2';
   const grid = document.createElement('div');
   grid.className = 'grid grid-cols-3 sm:grid-cols-5 gap-3';
   scroll.appendChild(grid);
