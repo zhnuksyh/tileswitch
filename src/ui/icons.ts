@@ -15,6 +15,7 @@ import {
   Flame,
   Star,
   SlidersHorizontal,
+  X,
   type IconNode,
 } from 'lucide';
 
@@ -44,4 +45,5 @@ export const icons = {
   streak: Flame,
   score: Star,
   settings: SlidersHorizontal,
+  close: X,
 };

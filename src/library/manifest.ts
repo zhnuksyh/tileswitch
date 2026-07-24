@@ -29,12 +29,13 @@ function asset(path: string): string {
 }
 
 // --- Source 1: public placeholders (starter set) ---------------------------
-// Reuses 5 of the bundled library PNGs. Only shown while the user has no
-// uploads of their own.
+// Six bundled library PNGs — the placeholder grid shown while the user has no
+// uploads of their own, so the setup screen is never empty.
 const PUBLIC_FILES: { file: string; title: string }[] = [
   { file: 'anime/spirited-away.png', title: 'Spirited Away' },
   { file: 'anime/your-name.png', title: 'Your Name' },
   { file: 'cartoon/spongebob.png', title: 'SpongeBob' },
+  { file: 'cartoon/adventure-time.png', title: 'Adventure Time' },
   { file: 'vector/mountain-sunrise.png', title: 'Mountain Sunrise' },
   { file: 'vector/tropical-beach.png', title: 'Tropical Beach' },
 ];

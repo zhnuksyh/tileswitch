@@ -2,6 +2,7 @@ import { icon, icons } from './icons';
 import { getLibrary, type LibraryImage } from '../library/manifest';
 import { addUploads, removeUpload } from '../library/uploads';
 import { nextImage, markSeen } from '../library/rotation';
+import { setBackground, clearBackground, hasBackground } from '../library/background';
 import { play } from '../audio/sfx';
 import { animate } from './motion';
 import { DIFFICULTIES, DEFAULT_DIFFICULTY } from '../game/difficulty';
@@ -38,7 +39,7 @@ export function renderSetup(
 
   const container = document.createElement('div');
   container.className =
-    'min-h-screen w-full flex flex-col items-center justify-center gap-6 p-6';
+    'min-h-screen w-full flex flex-col items-center gap-6 p-4 sm:p-6 lg:justify-center';
 
   // Settings gear, pinned top-right — opens the gameplay toggles panel.
   const gearBtn = document.createElement('button');
@@ -52,7 +53,7 @@ export function renderSetup(
 
   // Title
   const header = document.createElement('div');
-  header.className = 'flex flex-col items-center gap-3 text-center';
+  header.className = 'flex flex-col items-center gap-2 text-center pt-6 lg:pt-0';
   const titleRow = document.createElement('div');
   titleRow.className = 'flex items-center gap-3';
   titleRow.appendChild(icon(icons.puzzle, 'w-9 h-9 text-accent'));
@@ -67,38 +68,149 @@ export function renderSetup(
   header.appendChild(sub);
   container.appendChild(header);
 
-  const card = document.createElement('div');
-  card.className =
-    'flex flex-col gap-5 p-6 rounded-3xl bg-base-800/60 ring-1 ring-base-700 w-full max-w-xl';
+  // Two-column shell: on desktop the left column is the preview + upload box,
+  // the right column is the library grid + difficulty + start. On mobile it
+  // collapses to a single stacked column (order tuned in each panel below).
+  const layout = document.createElement('div');
+  layout.className =
+    'w-full max-w-5xl grid grid-cols-1 lg:grid-cols-2 gap-5 lg:items-start';
+  container.appendChild(layout);
 
-  // Shared preview
+  // ==== Left column: preview carousel + upload box ==========================
+  const leftCol = document.createElement('div');
+  leftCol.className = 'flex flex-col gap-5';
+  layout.appendChild(leftCol);
+
+  const previewCard = document.createElement('div');
+  previewCard.className =
+    'flex flex-col gap-3 p-5 rounded-3xl bg-base-800/60 ring-1 ring-base-700';
+
+  // Preview frame. Two stacked <img> layers let us cross-slide between images
+  // for the carousel (one animates out while the next animates in).
   const preview = document.createElement('div');
   preview.className =
     'relative w-full aspect-video rounded-2xl overflow-hidden bg-base-900 ring-1 ring-base-700 flex items-center justify-center';
   const previewImg = document.createElement('img');
-  previewImg.className = 'w-full h-full object-cover';
+  previewImg.className = 'absolute inset-0 w-full h-full object-cover';
   previewImg.alt = 'Puzzle preview';
   preview.appendChild(previewImg);
   const previewHint = document.createElement('span');
   previewHint.className = 'absolute text-slate-500 text-sm';
-  previewHint.textContent = 'Shuffle or pick an image to preview';
+  previewHint.textContent = 'Pick an image to preview';
   preview.appendChild(previewHint);
-  card.appendChild(preview);
+  previewCard.appendChild(preview);
+
+  const previewTitle = document.createElement('p');
+  previewTitle.className = 'text-sm font-medium text-slate-300 text-center truncate min-h-[1.25rem]';
+  previewCard.appendChild(previewTitle);
+  leftCol.appendChild(previewCard);
+
+  // Upload box (its own card, under the preview on desktop).
+  const uploadCard = document.createElement('div');
+  uploadCard.className =
+    'p-5 rounded-3xl bg-base-800/60 ring-1 ring-base-700';
+  leftCol.appendChild(uploadCard);
+
+  // ==== Right column: library grid + difficulty + start ====================
+  const rightCol = document.createElement('div');
+  rightCol.className = 'flex flex-col gap-5';
+  layout.appendChild(rightCol);
+
+  const libraryCard = document.createElement('div');
+  libraryCard.className =
+    'flex flex-col gap-4 p-5 rounded-3xl bg-base-800/60 ring-1 ring-base-700';
+  rightCol.appendChild(libraryCard);
+
+  const libHead = document.createElement('div');
+  libHead.className = 'flex items-center justify-between gap-3';
+  const libTitle = document.createElement('span');
+  libTitle.className = 'text-sm font-semibold text-slate-200';
+  libTitle.textContent = 'Choose an image';
+  libHead.appendChild(libTitle);
+
+  const shuffleBtn = document.createElement('button');
+  shuffleBtn.className =
+    'flex items-center gap-2 px-4 py-2 rounded-full bg-base-700 hover:bg-base-600 transition-colors text-xs font-semibold disabled:opacity-40 disabled:pointer-events-none';
+  shuffleBtn.appendChild(icon(icons.shuffle, 'w-4 h-4'));
+  shuffleBtn.appendChild(document.createTextNode('Shuffle'));
+  libHead.appendChild(shuffleBtn);
+  libraryCard.appendChild(libHead);
+
+  // --- Carousel state -------------------------------------------------------
+  // The preview auto-rotates through random library images every 10s until the
+  // user interacts (picks/shuffles). Manual selection stops the auto-rotation.
+  let autoRotate = true;
+  let rotateTimer: number | undefined;
+
+  const stopRotation = () => {
+    autoRotate = false;
+    if (rotateTimer !== undefined) {
+      clearTimeout(rotateTimer);
+      rotateTimer = undefined;
+    }
+  };
+
+  const scheduleRotation = () => {
+    if (rotateTimer !== undefined) clearTimeout(rotateTimer);
+    rotateTimer = window.setTimeout(() => {
+      if (!autoRotate) return;
+      const entry = nextImage(library, selectedId ?? undefined);
+      if (entry) previewOnly(entry, 'auto');
+      scheduleRotation();
+    }, 10_000);
+  };
 
   const enableStart = () => {
     startBtn.disabled = false;
     startBtn.classList.remove('opacity-50', 'pointer-events-none');
   };
 
-  // Load an image by library entry: sets it as the selection and previews it.
+  // Update just the preview image (used by the carousel and by selection).
+  // `dir` chooses the slide direction; 'auto' rotates carousel-style.
+  let slideDir = 1;
+  const setPreview = (entry: LibraryImage, dir: 'left' | 'right' | 'auto' | 'none') => {
+    previewImg.src = entry.src;
+    previewTitle.textContent = entry.title;
+    previewHint.classList.add('hidden');
+    if (dir === 'none') return;
+    let from = 'translateX(0)';
+    if (dir === 'auto') {
+      // Alternate slide direction each auto-advance for a carousel feel.
+      slideDir *= -1;
+      from = `translateX(${slideDir * 24}px)`;
+    } else if (dir === 'left') {
+      from = 'translateX(24px)';
+    } else if (dir === 'right') {
+      from = 'translateX(-24px)';
+    }
+    animate(
+      previewImg,
+      [
+        { opacity: 0.35, transform: from },
+        { opacity: 1, transform: 'translateX(0)' },
+      ],
+      { duration: 320, easing: 'cubic-bezier(0.22, 1, 0.36, 1)' },
+    );
+  };
+
+  // Preview an entry without committing it as the selection (carousel).
+  const previewOnly = (entry: LibraryImage, dir: 'left' | 'right' | 'auto' | 'none') => {
+    carouselId = entry.id;
+    setPreview(entry, dir);
+  };
+  // The image currently shown by the carousel (may differ from selection).
+  let carouselId: string | null = null;
+
+  // Commit an entry as the chosen puzzle image. Stops auto-rotation.
   const selectImage = (entry: LibraryImage, options: { count?: boolean } = {}) => {
+    stopRotation();
     const img = new Image();
     img.crossOrigin = 'anonymous';
     img.onload = () => {
       selectedImage = img;
       selectedId = entry.id;
+      setPreview(entry, 'none');
       previewImg.src = entry.src;
-      previewHint.classList.add('hidden');
       enableStart();
       if (options.count) markSeen(library, entry.id);
       refreshSelection();
@@ -112,28 +224,13 @@ export function renderSetup(
     img.src = entry.src;
   };
 
-  // --- Shuffle bar -----------------------------------------------------------
-  const shuffleRow = document.createElement('div');
-  shuffleRow.className = 'flex items-center gap-3';
-
-  const shuffleBtn = document.createElement('button');
-  shuffleBtn.className =
-    'flex items-center gap-2 px-5 py-2.5 rounded-full bg-base-700 hover:bg-base-600 transition-colors text-sm font-semibold disabled:opacity-40 disabled:pointer-events-none';
-  shuffleBtn.appendChild(icon(icons.shuffle, 'w-4 h-4'));
-  shuffleBtn.appendChild(document.createTextNode('Shuffle'));
   shuffleBtn.addEventListener('click', () => {
-    const entry = nextImage(library, selectedId ?? undefined);
+    const entry = nextImage(library, selectedId ?? carouselId ?? undefined);
     if (!entry) return;
     selectImage(entry, { count: true });
   });
-  shuffleRow.appendChild(shuffleBtn);
 
-  const shuffleHint = document.createElement('span');
-  shuffleHint.className = 'text-xs text-slate-500';
-  shuffleRow.appendChild(shuffleHint);
-  card.appendChild(shuffleRow);
-
-  // --- Library grid ----------------------------------------------------------
+  // --- Library grid (3×2, with a "View more" 6th cell) ---------------------
   const thumbButtons = new Map<string, HTMLButtonElement>();
 
   const refreshSelection = () => {
@@ -144,48 +241,76 @@ export function renderSetup(
 
   const grid = document.createElement('div');
   grid.className = 'grid grid-cols-3 gap-3';
-  card.appendChild(grid);
+  libraryCard.appendChild(grid);
 
   const sourceNote = document.createElement('p');
   sourceNote.className = 'text-[11px] text-slate-500';
-  card.appendChild(sourceNote);
+  libraryCard.appendChild(sourceNote);
 
   const uploadCount = () => library.filter((i) => i.source === 'uploaded').length;
+
+  const onRemove = (id: string) => void removeUpload(id).then(refreshLibrary);
 
   const renderGrid = () => {
     grid.innerHTML = '';
     thumbButtons.clear();
-    for (const image of library) {
+
+    // Show the first five images inline; if there are six or more, the sixth
+    // cell becomes "View more" opening the full-library modal. With five or
+    // fewer, every image shows and there's no view-more cell.
+    const inlineCount = library.length > 6 ? 5 : 6;
+    const inline = library.slice(0, inlineCount);
+    for (const image of inline) {
+      grid.appendChild(renderThumb(image, selectImage, thumbButtons, onRemove));
+    }
+    if (library.length > 6) {
       grid.appendChild(
-        renderThumb(image, selectImage, thumbButtons, (id) => {
-          void removeUpload(id).then(refreshLibrary);
-        }),
+        renderViewMore(library.length - inline.length, () => showLibraryModal()),
       );
     }
+
     refreshSelection();
 
     const uploads = uploadCount();
-    shuffleHint.textContent = library.length
-      ? `${library.length} in rotation`
-      : 'No images yet — add some below';
     shuffleBtn.disabled = library.length === 0;
     sourceNote.textContent = uploads
       ? `Your library — ${uploads} / ${MAX_LIBRARY_IMAGES} images`
-      : 'Public starter set — add your own images to make it yours';
+      : 'Placeholder set — add your own images to make it yours';
+  };
+
+  // Full-library modal: every image in a scrollable grid.
+  const showLibraryModal = () => {
+    play('select');
+    showAllImages(container, library, selectedId, (entry) => {
+      selectImage(entry, { count: true });
+    }, onRemove);
   };
 
   // Re-read the pool after uploads change, keeping the current selection valid.
   const refreshLibrary = async () => {
+    const first = library.length === 0;
     library = await getLibrary();
     if (selectedId && !library.some((i) => i.id === selectedId)) {
       selectedId = null;
       selectedImage = null;
-      previewImg.removeAttribute('src');
-      previewHint.classList.remove('hidden');
       startBtn.disabled = true;
       startBtn.classList.add('opacity-50', 'pointer-events-none');
     }
     renderGrid();
+
+    // On first population, seed the carousel with a random image and start it.
+    if (first && library.length > 0 && !selectedId) {
+      const entry = nextImage(library, undefined);
+      if (entry) {
+        previewOnly(entry, 'none');
+        if (autoRotate) scheduleRotation();
+      }
+    } else if (library.length === 0) {
+      stopRotation();
+      previewImg.removeAttribute('src');
+      previewTitle.textContent = '';
+      previewHint.classList.remove('hidden');
+    }
   };
 
   // --- Add images (drag-drop + file select) ---------------------------------
@@ -199,7 +324,7 @@ export function renderSetup(
     const accepted = files.slice(0, room);
     const rejected = files.length - accepted.length;
 
-    // Loading screen while images are encoded to WebP and stored.
+    // Loading screen while images are encoded and stored.
     const loader = showLoading(container, accepted.length);
     const { added, failed } = await addUploads(accepted, loader.update);
     loader.close();
@@ -213,13 +338,13 @@ export function renderSetup(
     }
     void failed;
   });
-  card.appendChild(addZone);
+  uploadCard.appendChild(addZone);
 
   // Difficulty selector: sets how fine the tile grid is.
   const diffSection = document.createElement('div');
-  diffSection.className = 'flex flex-col gap-2 pt-1';
+  diffSection.className = 'flex flex-col gap-2 p-5 rounded-3xl bg-base-800/60 ring-1 ring-base-700';
   const diffLabel = document.createElement('span');
-  diffLabel.className = 'text-xs font-medium text-slate-400';
+  diffLabel.className = 'text-sm font-semibold text-slate-200';
   diffLabel.textContent = 'Difficulty';
   diffSection.appendChild(diffLabel);
 
@@ -251,14 +376,12 @@ export function renderSetup(
     diffRow.appendChild(btn);
   }
   diffSection.appendChild(diffRow);
-  card.appendChild(diffSection);
-
-  container.appendChild(card);
+  rightCol.appendChild(diffSection);
 
   // Start
   const startBtn = document.createElement('button');
   startBtn.className =
-    'flex items-center gap-2 px-8 py-3 rounded-full bg-accent hover:bg-accent-hover text-base-900 font-semibold transition-colors shadow-lg shadow-accent/20 opacity-50 pointer-events-none';
+    'flex items-center justify-center gap-2 px-8 py-3 rounded-full bg-accent hover:bg-accent-hover text-base-900 font-semibold transition-colors shadow-lg shadow-black/40 opacity-50 pointer-events-none';
   startBtn.disabled = true;
   startBtn.appendChild(icon(icons.puzzle, 'w-5 h-5'));
   startBtn.appendChild(document.createTextNode('Start Puzzle'));
@@ -269,11 +392,11 @@ export function renderSetup(
       baseTiles: selectedDifficulty.baseTiles,
     });
   });
-  container.appendChild(startBtn);
+  rightCol.appendChild(startBtn);
 
   root.appendChild(container);
 
-  // Populate from IndexedDB (async); shows the public starter set until then.
+  // Populate from IndexedDB (async); shows the placeholder set until then.
   void refreshLibrary();
 
   // Gentle entrance for the whole setup.
@@ -345,6 +468,106 @@ function renderThumb(
   btn.addEventListener('click', () => onPick(image));
   registry.set(image.id, btn);
   return btn;
+}
+
+// The "View more" tile — the 6th cell when the library holds more than six
+// images. `hidden` is how many images aren't shown inline.
+function renderViewMore(hidden: number, onClick: () => void): HTMLButtonElement {
+  const btn = document.createElement('button');
+  btn.className =
+    'flex flex-col items-center justify-center gap-1 aspect-video rounded-xl bg-base-900 ring-1 ring-base-700 hover:ring-base-500 text-slate-300 transition-all';
+  btn.appendChild(icon(icons.image, 'w-6 h-6'));
+  const label = document.createElement('span');
+  label.className = 'text-xs font-semibold';
+  label.textContent = 'View more';
+  btn.appendChild(label);
+  const count = document.createElement('span');
+  count.className = 'text-[11px] text-slate-500 tabular-nums';
+  count.textContent = `+${hidden}`;
+  btn.appendChild(count);
+  btn.addEventListener('click', onClick);
+  return btn;
+}
+
+// Full-library modal: every image in a scrollable grid. Picking one closes the
+// modal and selects it.
+function showAllImages(
+  host: HTMLElement,
+  library: LibraryImage[],
+  selectedId: string | null,
+  onPick: (image: LibraryImage) => void,
+  onRemove: (id: string) => void,
+): void {
+  const overlay = document.createElement('div');
+  overlay.className =
+    'fixed inset-0 z-50 flex items-center justify-center p-4 sm:p-6 bg-black/70 backdrop-blur-sm';
+
+  const cardEl = document.createElement('div');
+  cardEl.className =
+    'flex flex-col gap-4 p-5 sm:p-6 rounded-3xl bg-base-800 ring-1 ring-base-700 w-full max-w-3xl max-h-[85vh] shadow-2xl';
+
+  const head = document.createElement('div');
+  head.className = 'flex items-center justify-between gap-3';
+  const title = document.createElement('h2');
+  title.className = 'text-lg font-semibold';
+  title.textContent = `Your library — ${library.length} image${library.length === 1 ? '' : 's'}`;
+  head.appendChild(title);
+  const closeBtn = document.createElement('button');
+  closeBtn.className =
+    'flex items-center justify-center w-9 h-9 rounded-full bg-base-700 hover:bg-base-600 transition-colors';
+  closeBtn.setAttribute('aria-label', 'Close');
+  closeBtn.appendChild(icon(icons.close, 'w-5 h-5'));
+  head.appendChild(closeBtn);
+  cardEl.appendChild(head);
+
+  const scroll = document.createElement('div');
+  scroll.className = 'overflow-y-auto -mx-1 px-1 no-scrollbar';
+  const modalGrid = document.createElement('div');
+  modalGrid.className = 'grid grid-cols-3 sm:grid-cols-4 gap-3';
+  const registry = new Map<string, HTMLButtonElement>();
+
+  const close = () => {
+    const anim = animate(overlay, [{ opacity: 1 }, { opacity: 0 }], { duration: 160 });
+    if (anim) anim.finished.then(() => overlay.remove());
+    else overlay.remove();
+  };
+
+  for (const image of library) {
+    const btn = renderThumb(
+      image,
+      (img) => {
+        onPick(img);
+        close();
+      },
+      registry,
+      (id) => {
+        onRemove(id);
+        const b = registry.get(id);
+        if (b) b.remove();
+      },
+    );
+    if (image.id === selectedId) btn.className = thumbClass(true);
+    modalGrid.appendChild(btn);
+  }
+  scroll.appendChild(modalGrid);
+  cardEl.appendChild(scroll);
+
+  closeBtn.addEventListener('click', close);
+  overlay.addEventListener('click', (e) => {
+    if (e.target === overlay) close();
+  });
+
+  overlay.appendChild(cardEl);
+  host.appendChild(overlay);
+  animate(overlay, [{ opacity: 0 }, { opacity: 1 }], { duration: 160 });
+  animate(
+    cardEl,
+    [
+      { opacity: 0, transform: 'scale(0.96) translateY(8px)' },
+      { opacity: 1, transform: 'scale(1) translateY(0)' },
+    ],
+    { duration: 220, easing: 'cubic-bezier(0.22, 1, 0.36, 1)' },
+  );
 }
 
 // Drag-and-drop zone with a file-select fallback. Calls back with picked files.
@@ -618,6 +841,65 @@ function showSettings(host: HTMLElement): void {
   toggleRow(icons.timer, 'Timer', 'Show a running clock while you play.', 'timer');
   toggleRow(icons.score, 'Score', 'Rate each solve by speed and moves.', 'score');
   toggleRow(icons.streak, 'Streak', 'Count consecutive solves.', 'streak');
+
+  // --- Background: upload a custom image, or reset to the void backdrop. -----
+  const bgSection = document.createElement('div');
+  bgSection.className = 'flex flex-col gap-2 pt-2 border-t border-base-700';
+  const bgHead = document.createElement('div');
+  bgHead.className = 'flex items-center gap-2';
+  bgHead.appendChild(icon(icons.image, 'w-4 h-4 text-slate-400'));
+  const bgLabel = document.createElement('span');
+  bgLabel.className = 'text-sm font-medium';
+  bgLabel.textContent = 'Background';
+  bgHead.appendChild(bgLabel);
+  bgSection.appendChild(bgHead);
+
+  const bgDesc = document.createElement('p');
+  bgDesc.className = 'text-[11px] text-slate-500';
+  bgDesc.textContent = 'Set your own image behind the app, or keep the Void backdrop.';
+  bgSection.appendChild(bgDesc);
+
+  const bgRow = document.createElement('div');
+  bgRow.className = 'flex items-center gap-2';
+
+  const bgInput = document.createElement('input');
+  bgInput.type = 'file';
+  bgInput.accept = 'image/*';
+  bgInput.className = 'hidden';
+
+  const bgUpload = document.createElement('button');
+  bgUpload.className =
+    'flex-1 flex items-center justify-center gap-2 px-4 py-2 rounded-full bg-base-700 hover:bg-base-600 transition-colors text-sm font-medium';
+  bgUpload.appendChild(icon(icons.upload, 'w-4 h-4'));
+  bgUpload.appendChild(document.createTextNode('Upload image'));
+  bgUpload.addEventListener('click', () => bgInput.click());
+
+  const bgReset = document.createElement('button');
+  const paintReset = () => {
+    bgReset.disabled = !hasBackground();
+    bgReset.className =
+      'flex items-center justify-center gap-2 px-4 py-2 rounded-full bg-base-900 ring-1 ring-base-700 hover:ring-base-500 transition-colors text-sm font-medium disabled:opacity-40 disabled:pointer-events-none';
+  };
+  bgReset.appendChild(document.createTextNode('Reset to Void'));
+  paintReset();
+  bgReset.addEventListener('click', () => {
+    void clearBackground().then(paintReset);
+    play('select');
+  });
+
+  bgInput.addEventListener('change', () => {
+    const file = bgInput.files?.[0];
+    bgInput.value = '';
+    if (!file || !file.type.startsWith('image/')) return;
+    void setBackground(file).then(paintReset);
+    play('select');
+  });
+
+  bgRow.appendChild(bgUpload);
+  bgRow.appendChild(bgReset);
+  bgRow.appendChild(bgInput);
+  bgSection.appendChild(bgRow);
+  cardEl.appendChild(bgSection);
 
   // Best-stats read-out.
   const stats = loadStats();
