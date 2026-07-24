@@ -21,6 +21,10 @@ import { play } from '../audio/sfx';
 export interface BoardCallbacks {
   onProgress: (correct: number, total: number) => void;
   onWin: () => void;
+  /** Fired each time the player completes a swap (for move counting). */
+  onMove?: (moves: number) => void;
+  /** Fired once the reveal ends and the shuffled puzzle becomes playable. */
+  onReady?: () => void;
 }
 
 interface Slot {
@@ -46,6 +50,8 @@ export class Board {
   private slots: Slot[] = [];
   private selected: Slot | null = null;
   private solved = false;
+  private started = false;
+  private moves = 0;
 
   // Drag state (drag-to-swap).
   private dragging: Slot | null = null;
@@ -82,20 +88,14 @@ export class Board {
     this.gridEl = gridEl;
     this.root.appendChild(gridEl);
 
-    // Shuffle piece order across the cells until it isn't already solved.
-    const pieces = [...this.puzzle.pieces];
-    do {
-      for (let i = pieces.length - 1; i > 0; i--) {
-        const j = Math.floor(Math.random() * (i + 1));
-        [pieces[i], pieces[j]] = [pieces[j], pieces[i]];
-      }
-    } while (pieces.every((p, i) => p.id === i) && pieces.length > 1);
-
-    for (let index = 0; index < pieces.length; index++) {
+    // Build in SOLVED order first: piece i sits in cell i. We reveal this
+    // finished picture briefly in start() before scrambling, so the player sees
+    // the goal. Interaction stays disabled until the shuffle completes.
+    for (let index = 0; index < this.puzzle.pieces.length; index++) {
       const row = Math.floor(index / grid.cols);
       const col = index % grid.cols;
       const el = document.createElement('div');
-      el.className = LOOSE_CLASS;
+      el.className = LOCKED_CLASS; // no grid styling during the reveal
       el.style.width = `${cellSize}px`;
       el.style.height = `${cellSize}px`;
       el.style.left = `${col * cellSize}px`;
@@ -105,7 +105,7 @@ export class Board {
         index,
         row,
         col,
-        piece: pieces[index],
+        piece: this.puzzle.pieces[index],
         el,
         locked: false,
       };
@@ -115,35 +115,85 @@ export class Board {
       this.slots.push(slot);
     }
 
-    // Lock any tiles that happen to start in the right place (no animation).
+    this.cb.onProgress(0, this.total);
+  }
+
+  /**
+   * Show the completed picture for a beat, then scramble into the playable
+   * shuffled state. Returns once the puzzle is live. `revealMs` is how long the
+   * solved image is held before shuffling.
+   */
+  start(revealMs = 1200): void {
+    if (this.started) return;
+    this.started = true;
+
+    const scramble = () => this.scramble();
+    if (prefersReducedMotion()) {
+      // No hold animation, but still give a brief glimpse.
+      window.setTimeout(scramble, Math.min(revealMs, 600));
+      return;
+    }
+    // Gentle "breathe" on the finished image so the reveal reads as intentional.
+    for (const slot of this.slots) {
+      slot.el.animate(
+        [{ transform: 'scale(1)' }, { transform: 'scale(1.015)' }, { transform: 'scale(1)' }],
+        { duration: revealMs, easing: 'ease-in-out' },
+      );
+    }
+    window.setTimeout(scramble, revealMs);
+  }
+
+  /** Shuffle the pieces across slots and hand control to the player. */
+  private scramble(): void {
+    const order = this.slots.map((s) => s.piece);
+    do {
+      for (let i = order.length - 1; i > 0; i--) {
+        const j = Math.floor(Math.random() * (i + 1));
+        [order[i], order[j]] = [order[j], order[i]];
+      }
+    } while (order.every((p, i) => p.id === i) && order.length > 1);
+
+    for (let i = 0; i < this.slots.length; i++) {
+      const slot = this.slots[i];
+      slot.piece = order[i];
+      slot.locked = false;
+      slot.el.className = LOOSE_CLASS;
+      slot.el.style.width = `${this.puzzle.cellSize}px`;
+      slot.el.style.height = `${this.puzzle.cellSize}px`;
+      paintTile(slot.el, this.puzzle, slot.piece);
+    }
+
+    // Lock any tile that happens to land correctly (no animation).
     for (const slot of this.slots) {
       if (this.isCorrect(slot)) this.lock(slot, false);
     }
 
     this.paintSlots();
-    this.playIntro();
+    this.playShuffleBurst();
+    play('swap');
     this.cb.onProgress(this.lockedCount(), this.total);
+    this.cb.onReady?.();
   }
 
-  /** Staggered scale/fade-in of tiles when the board first appears. */
-  private playIntro(): void {
+  /** Quick scatter animation as the solved image breaks into shuffled tiles. */
+  private playShuffleBurst(): void {
     if (prefersReducedMotion()) return;
     for (const slot of this.slots) {
-      // Diagonal wave: cells further from the top-left start slightly later.
-      const wave = slot.row + slot.col;
+      const jx = (Math.random() - 0.5) * 26;
+      const jy = (Math.random() - 0.5) * 26;
+      const rot = (Math.random() - 0.5) * 10;
       slot.el.animate(
         [
-          { opacity: 0, transform: 'scale(0.6)' },
-          { opacity: 1, transform: 'scale(1)' },
+          { transform: `translate(${jx}px, ${jy}px) rotate(${rot}deg) scale(0.9)`, offset: 0 },
+          { transform: 'translate(0,0) rotate(0) scale(1)', offset: 1 },
         ],
-        {
-          duration: 340,
-          delay: wave * 28,
-          easing: 'cubic-bezier(0.34, 1.56, 0.64, 1)',
-          fill: 'backwards',
-        },
+        { duration: 360, easing: 'cubic-bezier(0.22, 1, 0.36, 1)' },
       );
     }
+  }
+
+  get moveCount(): number {
+    return this.moves;
   }
 
   private lockedCount(): number {
@@ -215,7 +265,7 @@ export class Board {
   }
 
   private onPointerDown(e: PointerEvent, slot: Slot): void {
-    if (this.solved || slot.locked) return;
+    if (!this.started || this.solved || slot.locked) return;
     e.preventDefault();
     this.dragging = slot;
     this.dragMoved = false;
@@ -308,6 +358,8 @@ export class Board {
 
   /** Exchange the pieces shown by two slots, animate the glide, and repaint. */
   private swap(a: Slot, b: Slot): void {
+    this.moves += 1;
+    this.cb.onMove?.(this.moves);
     const tmp = a.piece;
     a.piece = b.piece;
     b.piece = tmp;
