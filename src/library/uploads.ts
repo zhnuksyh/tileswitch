@@ -20,12 +20,21 @@ export interface UploadedImage {
 }
 
 // cacheKey -> { blob, url } so we reuse one object URL per blob and can revoke
-// it. Full image and thumbnail are cached under separate keys for one id.
+// it. Full image, thumbnail and preview are cached under separate keys for one
+// id.
 const urlCache = new Map<string, { blob: Blob; url: string }>();
+
+// IndexedDB hands back a *new* Blob object on every read, so identity (===) is
+// never true across reads even for the same stored bytes. Compare size and type
+// instead: re-reading a row must keep its existing object URL, or any UI still
+// holding the previous one is left with a revoked, broken src.
+function sameBlob(a: Blob, b: Blob): boolean {
+  return a === b || (a.size === b.size && a.type === b.type);
+}
 
 function urlFor(key: string, blob: Blob): string {
   const cached = urlCache.get(key);
-  if (cached && cached.blob === blob) return cached.url;
+  if (cached && sameBlob(cached.blob, blob)) return cached.url;
   if (cached) URL.revokeObjectURL(cached.url);
   const url = URL.createObjectURL(blob);
   urlCache.set(key, { blob, url });

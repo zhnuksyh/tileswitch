@@ -408,15 +408,12 @@ export function renderSetup(
     loader.close();
 
     await refreshLibrary();
+    // Select from the refreshed pool, not from `added`: refreshLibrary re-reads
+    // the blobs from IndexedDB and mints new object URLs, revoking the ones
+    // `added` is holding. Reusing that stale entry leaves a dead src.
     if (added[0]) {
-      selectImage({
-        id: added[0].id,
-        title: added[0].title,
-        src: added[0].url,
-        thumb: added[0].thumbUrl,
-        preview: added[0].previewUrl,
-        source: 'uploaded',
-      });
+      const entry = library.find((i) => i.id === added[0].id);
+      if (entry) selectImage(entry);
     }
     if (rejected > 0) {
       showLimitDialog(container, uploadCount(), added.length, rejected);
