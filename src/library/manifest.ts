@@ -26,6 +26,11 @@ export interface LibraryImage {
    * The board always uses `src`.
    */
   thumb: string;
+  /**
+   * Mid-size URL for the setup preview/carousel. Falls back to `src` when no
+   * separate preview exists. The board and share card always use `src`.
+   */
+  preview: string;
   source: ImageSource;
 }
 
@@ -51,11 +56,19 @@ const publicImages: LibraryImage[] = PUBLIC_FILES.map(({ file, title }) => ({
   title,
   src: asset(`/library/${file}`),
   thumb: asset(`/library/${file}`),
+  preview: asset(`/library/${file}`),
   source: 'public' as const,
 }));
 
 function uploadToImage(u: UploadedImage): LibraryImage {
-  return { id: u.id, title: u.title, src: u.url, thumb: u.thumbUrl, source: 'uploaded' };
+  return {
+    id: u.id,
+    title: u.title,
+    src: u.url,
+    thumb: u.thumbUrl,
+    preview: u.previewUrl,
+    source: 'uploaded',
+  };
 }
 
 /**

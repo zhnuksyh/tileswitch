@@ -73,6 +73,11 @@ export interface StoredUpload {
    */
   thumb?: Blob;
   /**
+   * Mid-size preview for the setup carousel, so clicking between cards doesn't
+   * decode and animate the full-size image. Optional; falls back to `blob`.
+   */
+  preview?: Blob;
+  /**
    * User-defined position in the library (lower = earlier). Optional for
    * backward compatibility; rows without it fall back to `addedAt` order.
    */

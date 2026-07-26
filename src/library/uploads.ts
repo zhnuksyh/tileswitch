@@ -14,6 +14,8 @@ export interface UploadedImage {
   url: string;
   /** Object URL for a small preview. Falls back to `url` when none is stored. */
   thumbUrl: string;
+  /** Object URL for the mid-size preview. Falls back to `url`. */
+  previewUrl: string;
   addedAt: number;
 }
 
@@ -37,6 +39,7 @@ function toUploaded(s: StoredUpload): UploadedImage {
     title: s.title,
     url,
     thumbUrl: s.thumb ? urlFor(`thumb:${s.id}`, s.thumb) : url,
+    previewUrl: s.preview ? urlFor(`preview:${s.id}`, s.preview) : url,
     addedAt: s.addedAt,
   };
 }
@@ -108,6 +111,7 @@ export async function addUpload(file: File): Promise<UploadedImage> {
     type: encoded.type,
     addedAt: Date.now(),
     thumb: encoded.thumb,
+    preview: encoded.preview,
   };
   await putUpload(entry);
   return toUploaded(entry);
@@ -158,7 +162,7 @@ export async function addUploads(
 /** Remove an uploaded image by id. */
 export async function removeUpload(id: string): Promise<void> {
   await deleteUpload(id);
-  for (const key of [id, `thumb:${id}`]) {
+  for (const key of [id, `thumb:${id}`, `preview:${id}`]) {
     const cached = urlCache.get(key);
     if (cached) {
       URL.revokeObjectURL(cached.url);

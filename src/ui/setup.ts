@@ -203,7 +203,9 @@ export function renderSetup(
   // `dir` chooses the slide direction; 'auto' rotates carousel-style.
   let slideDir = 1;
   const setPreview = (entry: LibraryImage, dir: 'left' | 'right' | 'auto' | 'none') => {
-    previewImg.src = entry.src;
+    // Mid-size, not full: this element is a few hundred px and gets animated on
+    // every card click, so a full-size texture here is what makes it stutter.
+    previewImg.src = entry.preview;
     previewHint.classList.add('hidden');
     if (dir === 'none') return;
     let from = 'translateX(0)';
@@ -237,23 +239,33 @@ export function renderSetup(
   // Commit an entry as the chosen puzzle image. Stops auto-rotation.
   const selectImage = (entry: LibraryImage, options: { count?: boolean } = {}) => {
     stopRotation();
+    // Show the (cheap) preview and settle the UI straight away — waiting on the
+    // full-size decode here is what made clicking between cards feel laggy.
+    selectedId = entry.id;
+    selectedEntry = entry;
+    setPreview(entry, 'none');
+    if (options.count) markSeen(library, entry.id);
+    refreshSelection();
+    play('select');
+    animate(
+      previewImg,
+      [{ opacity: 0.3, transform: 'scale(1.03)' }, { opacity: 1, transform: 'scale(1)' }],
+      { duration: 260, easing: 'ease-out' },
+    );
+
+    // Decode the full-size image in the background; it's only needed once the
+    // player actually starts. Start goes back to disabled until it's ready, so
+    // it can't be clicked against a stale image. A late arrival for a
+    // since-changed selection is discarded.
+    selectedImage = null;
+    startBtn.disabled = true;
+    startBtn.classList.add('opacity-50', 'pointer-events-none');
     const img = new Image();
     img.crossOrigin = 'anonymous';
     img.onload = () => {
+      if (selectedId !== entry.id) return;
       selectedImage = img;
-      selectedId = entry.id;
-      selectedEntry = entry;
-      setPreview(entry, 'none');
-      previewImg.src = entry.src;
       enableStart();
-      if (options.count) markSeen(library, entry.id);
-      refreshSelection();
-      play('select');
-      animate(
-        previewImg,
-        [{ opacity: 0.3, transform: 'scale(1.03)' }, { opacity: 1, transform: 'scale(1)' }],
-        { duration: 260, easing: 'ease-out' },
-      );
     };
     img.src = entry.src;
   };
@@ -402,6 +414,7 @@ export function renderSetup(
         title: added[0].title,
         src: added[0].url,
         thumb: added[0].thumbUrl,
+        preview: added[0].previewUrl,
         source: 'uploaded',
       });
     }
@@ -934,7 +947,7 @@ function renderHistoryThumb(
   img.className = 'w-full h-full object-cover';
   img.loading = 'lazy';
   img.alt = image.title;
-  img.src = image.src;
+  img.src = image.thumb;
   frame.appendChild(img);
 
   const label = document.createElement('span');
@@ -1133,7 +1146,7 @@ function showHistoryDetail(
   const img = document.createElement('img');
   img.className = 'w-full h-full object-cover';
   img.alt = image.title;
-  img.src = image.src;
+  img.src = image.preview;
   frame.appendChild(img);
   cardEl.appendChild(frame);
 

@@ -16,6 +16,13 @@ const WEBP_QUALITY = 0.9;
 /** Longest edge for the library-grid thumbnail. */
 const THUMB_EDGE = 320;
 const THUMB_QUALITY = 0.8;
+/**
+ * Longest edge for the setup-screen preview. That element is a few hundred CSS
+ * px, so 1024 covers it at 2x DPR — and it's the size the carousel animates, so
+ * keeping it small is what makes clicking between cards feel instant.
+ */
+const PREVIEW_EDGE = 1024;
+const PREVIEW_QUALITY = 0.85;
 
 export interface EncodedImage {
   blob: Blob;
@@ -25,6 +32,8 @@ export interface EncodedImage {
   height: number;
   /** Small preview for library grids; undefined if it could not be produced. */
   thumb?: Blob;
+  /** Mid-size image for the setup preview/carousel; undefined on failure. */
+  preview?: Blob;
 }
 
 /** Scale (w,h) so the longest edge is at most `maxEdge`. Never upscales. */
@@ -145,7 +154,16 @@ export async function encodeForStorage(file: File): Promise<EncodedImage> {
 
     const t = fit(probe.width, probe.height, THUMB_EDGE);
     const thumb = (await toBlob(probe, t.width, t.height, THUMB_QUALITY)) ?? undefined;
-    return { ...main, thumb };
+
+    // Only worth a separate preview blob when the stored image is meaningfully
+    // bigger than the preview element needs.
+    let preview: Blob | undefined;
+    const p = fit(probe.width, probe.height, PREVIEW_EDGE);
+    if (p.scaled) {
+      preview = (await toBlob(probe, p.width, p.height, PREVIEW_QUALITY)) ?? undefined;
+    }
+
+    return { ...main, thumb, preview };
   } catch (err) {
     console.warn('Could not process image; storing the original.', err);
     const { width, height } = await readDimensions(file);
