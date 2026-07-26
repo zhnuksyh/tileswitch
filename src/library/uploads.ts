@@ -1,7 +1,8 @@
 // Images the user adds at runtime (drag-drop or file-select). Stored as Blobs
-// in IndexedDB (see db.ts) and re-encoded to WebP on the way in (see encode.ts)
-// so a large personal library stays light. Each stored Blob is exposed to the
-// UI as an object URL, cached by id so repeated reads don't leak URLs.
+// in IndexedDB (see db.ts), capped to a sane pixel size on the way in (see
+// encode.ts) so oversized photos don't stall rendering. Each stored Blob is
+// exposed to the UI as an object URL, cached by id so repeated reads don't leak
+// URLs.
 
 import { getAllUploads, putUpload, deleteUpload, requestPersistence, type StoredUpload } from './db';
 import { encodeForStorage } from './encode';
@@ -11,23 +12,33 @@ export interface UploadedImage {
   title: string;
   /** Object URL for display, valid for the page's lifetime. */
   url: string;
+  /** Object URL for a small preview. Falls back to `url` when none is stored. */
+  thumbUrl: string;
   addedAt: number;
 }
 
-// id -> { blob, url } so we reuse one object URL per image and can revoke it.
+// cacheKey -> { blob, url } so we reuse one object URL per blob and can revoke
+// it. Full image and thumbnail are cached under separate keys for one id.
 const urlCache = new Map<string, { blob: Blob; url: string }>();
 
-function urlFor(id: string, blob: Blob): string {
-  const cached = urlCache.get(id);
+function urlFor(key: string, blob: Blob): string {
+  const cached = urlCache.get(key);
   if (cached && cached.blob === blob) return cached.url;
   if (cached) URL.revokeObjectURL(cached.url);
   const url = URL.createObjectURL(blob);
-  urlCache.set(id, { blob, url });
+  urlCache.set(key, { blob, url });
   return url;
 }
 
 function toUploaded(s: StoredUpload): UploadedImage {
-  return { id: s.id, title: s.title, url: urlFor(s.id, s.blob), addedAt: s.addedAt };
+  const url = urlFor(s.id, s.blob);
+  return {
+    id: s.id,
+    title: s.title,
+    url,
+    thumbUrl: s.thumb ? urlFor(`thumb:${s.id}`, s.thumb) : url,
+    addedAt: s.addedAt,
+  };
 }
 
 /** Read all uploaded images in library order (see getAllUploads). */
@@ -96,6 +107,7 @@ export async function addUpload(file: File): Promise<UploadedImage> {
     blob: encoded.blob,
     type: encoded.type,
     addedAt: Date.now(),
+    thumb: encoded.thumb,
   };
   await putUpload(entry);
   return toUploaded(entry);
@@ -146,9 +158,11 @@ export async function addUploads(
 /** Remove an uploaded image by id. */
 export async function removeUpload(id: string): Promise<void> {
   await deleteUpload(id);
-  const cached = urlCache.get(id);
-  if (cached) {
-    URL.revokeObjectURL(cached.url);
-    urlCache.delete(id);
+  for (const key of [id, `thumb:${id}`]) {
+    const cached = urlCache.get(key);
+    if (cached) {
+      URL.revokeObjectURL(cached.url);
+      urlCache.delete(key);
+    }
   }
 }

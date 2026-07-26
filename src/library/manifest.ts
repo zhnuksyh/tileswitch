@@ -20,6 +20,12 @@ export interface LibraryImage {
   title: string;
   /** Resolvable URL: bundled asset URL, or an object URL for uploads. */
   src: string;
+  /**
+   * Small preview URL for library grids. Falls back to `src` when no separate
+   * thumbnail exists (bundled images, and uploads stored before thumbnails).
+   * The board always uses `src`.
+   */
+  thumb: string;
   source: ImageSource;
 }
 
@@ -44,11 +50,12 @@ const publicImages: LibraryImage[] = PUBLIC_FILES.map(({ file, title }) => ({
   id: `public:${file}`,
   title,
   src: asset(`/library/${file}`),
+  thumb: asset(`/library/${file}`),
   source: 'public' as const,
 }));
 
 function uploadToImage(u: UploadedImage): LibraryImage {
-  return { id: u.id, title: u.title, src: u.url, source: 'uploaded' };
+  return { id: u.id, title: u.title, src: u.url, thumb: u.thumbUrl, source: 'uploaded' };
 }
 
 /**

@@ -48,9 +48,9 @@ function tx<T>(
   );
 }
 
-// Ask the browser to persist this origin's storage so the library (now stored
-// at full quality) is far less likely to be evicted under disk pressure. Safe
-// to call repeatedly; no-ops where unsupported. Fire-and-forget.
+// Ask the browser to persist this origin's storage so the library is far less
+// likely to be evicted under disk pressure. Safe to call repeatedly; no-ops
+// where unsupported. Fire-and-forget.
 let persistenceRequested = false;
 export function requestPersistence(): void {
   if (persistenceRequested) return;
@@ -66,6 +66,12 @@ export interface StoredUpload {
   blob: Blob;
   type: string;
   addedAt: number;
+  /**
+   * Small WebP preview for library grids, so thumbnails don't decode the
+   * full-size image. Optional: rows stored before thumbnails existed, and
+   * images we couldn't process, fall back to `blob`.
+   */
+  thumb?: Blob;
   /**
    * User-defined position in the library (lower = earlier). Optional for
    * backward compatibility; rows without it fall back to `addedAt` order.

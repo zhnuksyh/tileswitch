@@ -397,7 +397,13 @@ export function renderSetup(
 
     await refreshLibrary();
     if (added[0]) {
-      selectImage({ id: added[0].id, title: added[0].title, src: added[0].url, source: 'uploaded' });
+      selectImage({
+        id: added[0].id,
+        title: added[0].title,
+        src: added[0].url,
+        thumb: added[0].thumbUrl,
+        source: 'uploaded',
+      });
     }
     if (rejected > 0) {
       showLimitDialog(container, uploadCount(), added.length, rejected);
@@ -578,7 +584,7 @@ function renderThumb(
   thumbImg.className = 'w-full h-full object-cover';
   thumbImg.loading = 'lazy';
   thumbImg.alt = image.title;
-  thumbImg.src = image.src;
+  thumbImg.src = image.thumb;
   btn.appendChild(thumbImg);
 
   const label = document.createElement('span');
@@ -652,7 +658,7 @@ function renderViewMore(
       cell.className =
         'w-full h-full object-cover opacity-70 group-hover:opacity-90 transition-opacity';
       cell.loading = 'lazy';
-      cell.src = image.src;
+      cell.src = image.thumb;
       cell.alt = '';
       collage.appendChild(cell);
     }
