@@ -1,14 +1,13 @@
-// Generates PWA PNG icons from a simple canvas drawing (no external deps).
-// Draws a rounded dark tile with an accent puzzle-piece glyph.
-import { readFileSync, writeFileSync } from 'node:fs';
+// Generates the PWA PNG icons from a hand-rasterized drawing (no external
+// deps). Keep in sync with public/favicon.svg: a rounded dark-grey tile with
+// lucide's `grid-2x2` glyph — the tile grid the game is played on — stroked in
+// the accent grey.
+import { writeFileSync } from 'node:fs';
 import { fileURLToPath } from 'node:url';
 import { dirname, join } from 'node:path';
+import zlib from 'node:zlib';
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
-
-// Minimal PNG encoder via zlib for a solid-color rounded icon with a puzzle
-// glyph is complex; instead we rasterize a small pixel buffer.
-import zlib from 'node:zlib';
 
 function crc32(buf) {
   let c = ~0;
@@ -53,52 +52,69 @@ function encodePNG(size, pixels) {
   ]);
 }
 
+// Signed distance to a rounded rectangle centred on (cx, cy); negative inside.
+function sdRoundRect(x, y, cx, cy, halfW, halfH, r) {
+  const qx = Math.abs(x - cx) - (halfW - r);
+  const qy = Math.abs(y - cy) - (halfH - r);
+  const outside = Math.hypot(Math.max(qx, 0), Math.max(qy, 0));
+  return outside + Math.min(Math.max(qx, qy), 0) - r;
+}
+
+// Signed distance to an axis-aligned segment from (x0, y0) to (x1, y1).
+function sdSegment(x, y, x0, y0, x1, y1) {
+  const dx = x1 - x0;
+  const dy = y1 - y0;
+  const len2 = dx * dx + dy * dy;
+  const t = Math.max(0, Math.min(1, ((x - x0) * dx + (y - y0) * dy) / len2));
+  return Math.hypot(x - (x0 + t * dx), y - (y0 + t * dy));
+}
+
+// Coverage of a distance field edge, smoothed over roughly one pixel so the
+// curves and strokes do not alias at 192px.
+function coverage(d) {
+  return Math.min(1, Math.max(0, 0.5 - d));
+}
+
+function mix(a, b, t) {
+  return [
+    a[0] + (b[0] - a[0]) * t,
+    a[1] + (b[1] - a[1]) * t,
+    a[2] + (b[2] - a[2]) * t,
+  ];
+}
+
 function draw(size) {
   const px = new Uint8Array(size * size * 4);
-  const bg = [15, 23, 42]; // base-900
-  const accent = [56, 189, 248];
-  const r = size * 0.18; // corner radius
-  const cx = size / 2;
-  const cy = size / 2;
+  const bg = [38, 38, 38]; // base-700 — the grey the icon sits on
+  const accent = [212, 212, 212]; // accent.DEFAULT
+  const s = size / 24; // scale from the 24x24 lucide viewBox
+  const c = size / 2;
+  // Glyph geometry mirrors favicon.svg: an 11x11 grid inset in the 24x24 box.
+  const half = 5.5 * s;
+  const stroke = s; // lucide's stroke-width: 2 → 1 unit either side of centre
+
   for (let y = 0; y < size; y++) {
     for (let x = 0; x < size; x++) {
       const i = (y * size + x) * 4;
-      // rounded rect mask
-      let inside = true;
-      const corners = [
-        [r, r],
-        [size - r, r],
-        [r, size - r],
-        [size - r, size - r],
-      ];
-      for (const [ccx, ccy] of corners) {
-        const outX = (ccx === r && x < r) || (ccx !== r && x > size - r);
-        const outY = (ccy === r && y < r) || (ccy !== r && y > size - r);
-        if (outX && outY) {
-          if (Math.hypot(x - ccx, y - ccy) > r) inside = false;
-        }
-      }
-      let col = bg;
-      if (inside) {
-        // simple puzzle glyph: a plus/knob motif — accent circle in center.
-        const d = Math.hypot(x - cx, y - cy);
-        if (d < size * 0.26) col = accent;
-        // knobs
-        const knob = size * 0.1;
-        const kb = [
-          [cx, cy - size * 0.26],
-          [cx + size * 0.26, cy],
-        ];
-        for (const [kx, ky] of kb) {
-          if (Math.hypot(x - kx, y - ky) < knob) col = accent;
-        }
-        px[i + 3] = 255;
-      } else {
-        px[i + 3] = 0;
-      }
-      px[i] = col[0];
-      px[i + 1] = col[1];
-      px[i + 2] = col[2];
+      const px5 = x + 0.5;
+      const py5 = y + 0.5;
+
+      // Backplate: rounded square filling the canvas.
+      const plate = sdRoundRect(px5, py5, c, c, size / 2, size / 2, 5 * s);
+      const plateA = coverage(plate);
+
+      // Glyph: the grid outline plus its centre cross, stroked.
+      const outline = Math.abs(sdRoundRect(px5, py5, c, c, half, half, 1.5 * s));
+      const vert = sdSegment(px5, py5, c, c - half, c, c + half);
+      const horiz = sdSegment(px5, py5, c - half, c, c + half, c);
+      const glyph = Math.min(outline, vert, horiz) - stroke;
+      const glyphA = coverage(glyph);
+
+      const col = mix(bg, accent, glyphA);
+      px[i] = Math.round(col[0]);
+      px[i + 1] = Math.round(col[1]);
+      px[i + 2] = Math.round(col[2]);
+      px[i + 3] = Math.round(plateA * 255);
     }
   }
   return px;
@@ -109,5 +125,3 @@ for (const size of [192, 512]) {
   writeFileSync(join(__dirname, '..', 'public', `icon-${size}.png`), buf);
   console.log(`wrote icon-${size}.png`);
 }
-
-void readFileSync;
