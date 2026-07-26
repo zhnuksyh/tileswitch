@@ -45,6 +45,10 @@ export interface SetupResult {
 // At ~1 MB per WebP-encoded 16:9 image, 60 images is ~60 MB, well within quota.
 const MAX_LIBRARY_IMAGES = 60;
 
+// Cells in the home library grid: 3 columns x 2 rows. Always filled — empty
+// cells are padded out — so the row keeps a constant height.
+const GRID_CELLS = 6;
+
 export function renderSetup(
   root: HTMLElement,
   onStart: (result: SetupResult) => void,
@@ -304,12 +308,12 @@ export function renderSetup(
 
     const uploads = uploadCount();
 
-    // The home grid always holds up to six cells and shows the first five
-    // images. Beyond five images, the sixth cell is "View more" (opening the
-    // full library, where the Add-image tile lives). At five or fewer, the
-    // sixth cell is the Add-image tile itself so you can always add more.
-    const hasMore = library.length > 5;
-    const inline = library.slice(0, hasMore ? 5 : library.length);
+    // The home grid always holds six cells and shows the first five images.
+    // Beyond five images, the sixth cell is "View more" (opening the full
+    // library, where the Add-image tile lives). At five or fewer, the sixth
+    // cell is the Add-image tile itself so you can always add more.
+    const hasMore = library.length > GRID_CELLS - 1;
+    const inline = library.slice(0, hasMore ? GRID_CELLS - 1 : library.length);
     for (const image of inline) {
       grid.appendChild(renderThumb(image, selectImage, thumbButtons, onRemove));
     }
@@ -319,6 +323,17 @@ export function renderSetup(
       );
     } else {
       grid.appendChild(renderAddTile(() => openUploadDialog()));
+    }
+
+    // Pad out to the full six cells. The grid is 3 columns, so a small library
+    // would otherwise occupy one row instead of two — and since the preview
+    // card stretches to match this row's height, the whole top section would
+    // visibly shrink and grow as images are added or removed.
+    for (let i = grid.childElementCount; i < GRID_CELLS; i++) {
+      const filler = document.createElement('div');
+      filler.className = 'aspect-video rounded-xl bg-base-900/40';
+      filler.setAttribute('aria-hidden', 'true');
+      grid.appendChild(filler);
     }
 
     refreshSelection();
