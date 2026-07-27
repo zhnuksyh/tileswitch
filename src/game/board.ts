@@ -585,9 +585,53 @@ export class Board {
     }, durationMs);
   }
 
-  destroy(): void {
+  /**
+   * Re-lay the board at a new cell size (device rotation / window resize).
+   *
+   * Purely geometric: which piece sits in which slot, what's locked, what's
+   * selected and the move count all carry over untouched. Any in-flight drag is
+   * cancelled first, since its ghost and start point are tied to the old
+   * pixel geometry.
+   */
+  resize(cellSize: number): void {
+    if (cellSize === this.puzzle.cellSize) return;
+    this.cancelDrag();
+
+    this.puzzle.cellSize = cellSize;
+    this.puzzle.boardWidth = this.puzzle.grid.cols * cellSize;
+    this.puzzle.boardHeight = this.puzzle.grid.rows * cellSize;
+
+    this.gridEl.style.width = `${this.puzzle.boardWidth}px`;
+    this.gridEl.style.height = `${this.puzzle.boardHeight}px`;
+
+    for (const slot of this.slots) {
+      slot.el.style.width = `${cellSize}px`;
+      slot.el.style.height = `${cellSize}px`;
+      slot.el.style.left = `${slot.col * cellSize}px`;
+      slot.el.style.top = `${slot.row * cellSize}px`;
+      // Re-paint so the background scales to the new board size.
+      paintTile(slot.el, this.puzzle, slot.piece);
+    }
+    // Restores box shadows/transforms for loose tiles; locked ones keep theirs.
+    this.paintSlots();
+  }
+
+  /** Drop any in-flight drag, removing the ghost and its window listeners. */
+  private cancelDrag(): void {
     window.removeEventListener('pointermove', this.onPointerMove);
     window.removeEventListener('pointerup', this.onPointerUp);
-    if (this.ghost) this.ghost.remove();
+    if (this.ghost) {
+      this.ghost.remove();
+      this.ghost = null;
+    }
+    if (this.dragging) {
+      this.dragging.el.style.opacity = '';
+      this.dragging = null;
+    }
+    this.dragMoved = false;
+  }
+
+  destroy(): void {
+    this.cancelDrag();
   }
 }
