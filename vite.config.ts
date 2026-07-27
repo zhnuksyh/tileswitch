@@ -38,7 +38,10 @@ export default defineConfig({
         theme_color: '#0a0a0a',
         background_color: '#0a0a0a',
         display: 'standalone',
-        orientation: 'portrait',
+        // Unlocked: wide (e.g. 16:9) puzzles are badly cramped on a portrait
+        // phone, so the installed app follows the device orientation and the
+        // board re-fits on rotate. See renderGame's refit handler.
+        orientation: 'any',
         icons: [
           {
             src: 'icon-192.png',

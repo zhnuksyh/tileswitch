@@ -133,36 +133,43 @@ export function renderGame(
   // Reserve space for the ~73px header and the board area's padding.
   const HEADER = 73;
   const PAD = 32;
-  const maxBoardW = Math.min(window.innerWidth - PAD, 1000);
-  const maxBoardH = window.innerHeight - HEADER - PAD;
-  const fitCell = Math.floor(
-    Math.min(maxBoardW / grid.cols, maxBoardH / grid.rows),
-  );
   // Keep tiles tappable but let fine grids shrink well below the old floor;
   // if even this minimum overflows, the board area scrolls (overflow-auto).
   const MIN_CELL = 22;
-  const safeCell = Math.max(MIN_CELL, fitCell);
+
+  // Recomputed on every rotate/resize, so a 16:9 puzzle that is cramped in
+  // portrait grows to use the full width once the device turns landscape.
+  const measure = () => {
+    const maxBoardW = Math.min(window.innerWidth - PAD, 1000);
+    const maxBoardH = window.innerHeight - HEADER - PAD;
+    const fitCell = Math.floor(
+      Math.min(maxBoardW / grid.cols, maxBoardH / grid.rows),
+    );
+    const cell = Math.max(MIN_CELL, fitCell);
+    // Board dimensions drive the header width: the controls' outer edges line
+    // up with the board's left/right edges rather than the full viewport,
+    // pulling them toward centre over the puzzle. We reference a 16:9 width so
+    // narrow (portrait) puzzles still get a comfortable control bar.
+    const ref169 = Math.round((maxBoardH * 16) / 9);
+    const headerMax = Math.min(
+      Math.max(grid.cols * cell, Math.min(ref169, maxBoardW)),
+      maxBoardW,
+    );
+    return { cell, headerMax };
+  };
+
+  const initial = measure();
+  const safeCell = initial.cell;
 
   const container = document.createElement('div');
   container.className = 'min-h-screen w-full flex flex-col items-center';
-
-  // Board dimensions drive the header width: the controls' outer edges line up
-  // with the board's left/right edges rather than the full viewport, pulling
-  // them toward centre over the puzzle. We reference a 16:9 width so narrow
-  // (portrait) puzzles still get a comfortable, not-too-cramped control bar.
-  const boardW = grid.cols * safeCell;
-  const ref169 = Math.round((maxBoardH * 16) / 9);
-  const headerMax = Math.min(
-    Math.max(boardW, Math.min(ref169, maxBoardW)),
-    maxBoardW,
-  );
 
   // Header. Menu sits alone on the left; everything else (stats + controls)
   // groups on the right. No divider under it. Width matches the board so the
   // controls sit at its edges.
   const header = document.createElement('header');
   header.className = 'flex items-center justify-between gap-4 px-1 w-full';
-  header.style.maxWidth = `${headerMax}px`;
+  header.style.maxWidth = `${initial.headerMax}px`;
 
   const backBtn = document.createElement('button');
   backBtn.className =
@@ -260,6 +267,7 @@ export function renderGame(
   const restartBtn = iconBtn('Restart puzzle');
   restartBtn.appendChild(icon(icons.restart, 'w-4 h-4'));
   restartBtn.addEventListener('click', () => {
+    teardown();
     board.destroy();
     cb.onRestart();
   });
@@ -317,7 +325,7 @@ export function renderGame(
       );
       // Stamp this image's history entry with the solve time + difficulty.
       recordSolved(ctx.entry.id, elapsedMs, ctx.difficultyLabel);
-      showWin(root, board, cb, {
+      showWin(root, board, cb, teardown, {
         settings,
         timeMs: elapsedMs,
         moves,
@@ -331,11 +339,37 @@ export function renderGame(
     },
   });
 
+  // Re-fit the board whenever the viewport changes — chiefly a device rotation,
+  // which is the whole point of allowing landscape: a wide puzzle that only had
+  // a narrow portrait width to work with gets to re-expand. Piece positions and
+  // progress survive; only the pixel geometry is recomputed.
+  //
+  // Rotation reports the new viewport a beat after the event on some mobile
+  // browsers, so measuring is deferred to the next frame.
+  let refitFrame = 0;
+  const refit = () => {
+    cancelAnimationFrame(refitFrame);
+    refitFrame = requestAnimationFrame(() => {
+      const { cell, headerMax } = measure();
+      header.style.maxWidth = `${headerMax}px`;
+      board.resize(cell);
+    });
+  };
+  window.addEventListener('resize', refit);
+  // Safari/iOS fires orientationchange without always firing resize.
+  window.addEventListener('orientationchange', refit);
+  const teardown = () => {
+    cancelAnimationFrame(refitFrame);
+    window.removeEventListener('resize', refit);
+    window.removeEventListener('orientationchange', refit);
+  };
+
   // Leaving to the menu mid-solve abandons the puzzle (and breaks the streak),
   // so confirm first when the puzzle isn't done.
   const leaveToMenu = () => {
     stopTimer();
     if (!finished && settings.streak) breakStreak();
+    teardown();
     board.destroy();
     cb.onExit();
   };
@@ -381,6 +415,8 @@ function showWin(
   root: HTMLElement,
   board: Board,
   cb: GameCallbacks,
+  /** Releases the game screen's viewport listeners before we leave it. */
+  teardown: () => void,
   info: WinInfo,
 ): void {
   const overlay = document.createElement('div');
@@ -522,6 +558,7 @@ function showWin(
     stopConfetti();
     overlay.remove();
     backPill.remove();
+    teardown();
     board.destroy();
     cb.onRestart();
   });
@@ -539,6 +576,7 @@ function showWin(
       stopConfetti();
       overlay.remove();
       backPill.remove();
+      teardown();
       board.destroy();
       cb.onNext();
     });
@@ -557,6 +595,7 @@ function showWin(
     if (info.settings.streak) breakStreak();
     overlay.remove();
     backPill.remove();
+    teardown();
     board.destroy();
     cb.onExit();
   });
